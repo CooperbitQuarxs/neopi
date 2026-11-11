@@ -1151,7 +1151,7 @@ export class AgentsHubComponent implements Component {
 			}
 			return `${enter}/Space set · Tab context · ${cancel} back`;
 		}
-		if (this.#search.focused) return "Search · hjkl type literally · Esc back to list";
+		if (this.#search.focused) return "Search · type to filter · Esc back to list";
 		if (this.#assigning) {
 			return `${enter} pick · PgUp/Dn page · / search · ${cancel} back`;
 		}
@@ -1309,7 +1309,10 @@ export class AgentsHubComponent implements Component {
 			return;
 		}
 		if (pick.act === "close") {
-			this.handleInput("\x1b");
+			const searching = this.#assigning
+				? this.#browser.filterFocused
+				: !this.#strip && !this.#createActive && this.#search.focused;
+			this.handleInput(searching ? "\x03" : "\x1b");
 			return;
 		}
 		if (strip?.kind === "chips") {
@@ -1718,9 +1721,9 @@ export class AgentsHubComponent implements Component {
 				];
 			}
 			return [
-				{ keys: ["j", "k"], label: "choose" },
+				{ keys: ["up", "down"], label: "choose" },
 				{ keys: ["enter", "space"], label: "set" },
-				{ keys: ["h", "l"], label: "pane" },
+				{ keys: ["left", "right"], label: "pane" },
 				cancel("back"),
 			];
 		}

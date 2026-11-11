@@ -312,7 +312,7 @@ export class AdvisorScopeOverlayComponent implements Component {
 	render(width: number): readonly string[] {
 		if (this.#editor) return this.#editor.render(width);
 		const hints = menuHintLines(
-			`↑ scope · h/l or ←/→ cycle scope · Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close · ? help`,
+			`↑ scope · ←/→ cycle scope · Tab panes · / filter · Space toggle file · Enter edit${this.#cb.openFile ? " · Ctrl-G edit config file" : ""} · a apply · Esc close · ? help`,
 			Math.max(1, width - 4),
 		);
 		this.#rows = Math.max(10, (process.stdout.rows || 40) - 5 - hints.length);

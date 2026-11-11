@@ -44,6 +44,8 @@ import type {
 	RpcResumeTreeResult,
 } from "./rpc-tree";
 import type { RpcJournalPage, RpcJournalPageOptions } from "./rpc-journal";
+import type { RpcJobOutputResult, RpcJobsResult } from "./rpc-jobs";
+import type { SlashCommandCompletion } from "../../slash-commands/builtin-registry";
 import type { RpcModel } from "./rpc-model";
 import type { RpcRolesResult, RpcSetRoleResult } from "./rpc-roles";
 import type { RpcModelSelectorResult } from "./rpc-model-selector";
@@ -105,6 +107,7 @@ export type RpcCommand =
 	  }
 	| { id?: string; type: "set_ask_dialog"; enabled: boolean }
 	| { id?: string; type: "get_available_commands" }
+	| { id?: string; type: "get_command_completions"; command: string; prefix: string }
 	| { id?: string; type: "get_entries"; since?: string }
 	| { id?: string; type: "snapshot_session_journal" }
 	| ({ id?: string; type: "get_entries_page" } & RpcJournalPageOptions)
@@ -119,10 +122,22 @@ export type RpcCommand =
 	| { id?: string; type: "set_approval_handler"; handler: RpcApprovalHandler }
 	| { id?: string; type: "get_subagents" }
 	| { id?: string; type: "get_subagent_messages"; subagentId?: string; sessionFile?: string; fromByte?: number }
+	| { id?: string; type: "get_subagent_history"; includeAdvisors?: boolean }
 	| { id?: string; type: "cancel_subagent"; subagentId: string }
 	| { id?: string; type: "steer_subagent"; subagentId: string; message: string }
 	| { id?: string; type: "set_subagent_thinking_level"; subagentId: string; level: ThinkingLevel }
 	| { id?: string; type: "set_subagent_fast"; subagentId: string; enabled: boolean }
+	| { id?: string; type: "get_jobs"; recentLimit?: number }
+	| { id?: string; type: "get_job_output"; jobId: string; fromByte?: number; revision?: string }
+	| { id?: string; type: "cancel_job"; jobId: string }
+	| {
+			id?: string;
+			type: "set_subagent_model";
+			subagentId: string;
+			selector?: string;
+			provider?: string;
+			modelId?: string;
+	  }
 	// Live voice (GPT live bound to this session)
 	| { id?: string; type: "live_start"; voice?: string }
 	| { id?: string; type: "live_connect"; sdpOffer: string; voice?: string }
@@ -143,6 +158,7 @@ export type RpcCommand =
 	| { id?: string; type: "get_roles" }
 	| { id?: string; type: "query_model_selector"; query: string }
 	| { id?: string; type: "set_role"; role: string }
+	| { id?: string; type: "cycle_role"; direction?: "forward" | "backward" }
 	| { id?: string; type: "get_models_configuration" }
 	| ({ id?: string; type: "set_model_role_configuration" } & RpcSetModelRoleConfiguration)
 	| ({ id?: string; type: "set_model_role_fallbacks" } & RpcSetModelRoleFallbacks)
@@ -260,6 +276,12 @@ export interface RpcSessionState {
 	tokensPerSecond: number | null;
 	messageCount: number;
 	queuedMessageCount: number;
+	/** Short machine hostname (first DNS label), as the TUI status line shows it. */
+	hostname: string;
+	/** Accumulated active-processing time of this conversation, including the run in flight; idle time never counts. */
+	activeTimeMs: number;
+	/** Running background jobs outside the subagents count, as the TUI jobs pill counts them. */
+	runningJobCount: number;
 	/** Background jobs or deliveries can still inject a follow-up and wake the session. */
 	hasPendingAsyncWork: boolean;
 	/** Same predicate as `session_settled`: idle with nothing queued or pending. */
@@ -278,6 +300,8 @@ export interface RpcSessionState {
 	contextUsage?: ContextUsage;
 	/** Role the current model was selected through (`set_role`, `--model @<role>`); absent after a direct model choice. */
 	activeRole?: string;
+	/** Native speech-to-text is enabled (`stt.enabled`); `dictation_start` is refused while it is off. */
+	dictationEnabled: boolean;
 	/** Live chat mode; `off` for an ordinary coding session. */
 	chatMode: ChatModeSetting;
 	/** Session mode; `plan` while plan mode is active, whichever path entered it. */
@@ -362,6 +386,8 @@ export interface RpcAvailableSlashCommand {
 	input?: { hint?: string };
 	subcommands?: Array<{ name: string; description?: string; usage?: string }>;
 	source: AvailableSlashCommandSource;
+	/** `tui` commands need the terminal UI and are refused over RPC with `code: "command_requires_tui"`. */
+	availability: "headless" | "tui";
 }
 
 export interface RpcAvailableCommandsUpdateFrame {
@@ -581,6 +607,67 @@ export interface RpcSubagentSnapshot {
 	fastModeActive?: boolean;
 }
 
+/** `set_subagent_model` result: the model the subagent runs from its next request, and its effort then. */
+export interface RpcSetSubagentModelResult {
+	provider: string;
+	modelId: string;
+	thinkingLevel: ThinkingLevel | undefined;
+	/** Selector resolution note, e.g. a fuzzy match that picked among several models. */
+	warning?: string;
+}
+
+/** One child of the root session's tree in the `get_subagent_history` roster. */
+export interface RpcSubagentHistoryEntry {
+	id: string;
+	kind: "sub" | "advisor";
+	parentId?: string;
+	displayName: string;
+	agent?: string;
+	/** Persisted task gist, or the current activity of a live child. */
+	description?: string;
+	/** `parked` children finished and are resumable; `aborted` ones were killed. Failure detail is not persisted. */
+	status: "running" | "idle" | "parked" | "aborted";
+	/** The child's session is in memory (`running` or `idle`). */
+	live: boolean;
+	sessionFile: string;
+	createdAt: number;
+	lastActivity: number;
+	responseAt?: number;
+	acceptedAt?: number;
+	terminalAt?: number;
+	/** Known only from the live roster. */
+	parentToolCallId?: string;
+	resolvedModel?: string;
+	resolvedModelIdentity?: string;
+	resolvedThinkingLevel?: ConfiguredThinkingLevel;
+	/** Live children only. */
+	fastModeEnabled?: boolean;
+	fastModeActive?: boolean;
+	modelRole?: string;
+	readOnly?: boolean;
+	metrics?: {
+		tokens: number;
+		requests: number;
+		tools: number;
+		cost: number;
+		durationMs: number;
+		contextTokens?: number;
+		contextWindow?: number;
+	};
+	/** Cumulative cost of the child's own session, excluding nested task results. */
+	directCost?: number;
+	outputPath?: string;
+	patchPath?: string;
+	branchName?: string;
+}
+
+export interface RpcSubagentHistoryResult {
+	rootSessionFile?: string;
+	rootAgentId?: string;
+	/** Oldest first. */
+	subagents: RpcSubagentHistoryEntry[];
+}
+
 export interface RpcSubagentMessagesResult {
 	sessionFile: string;
 	fromByte: number;
@@ -662,6 +749,13 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "get_command_completions";
+			success: true;
+			data: { items: SlashCommandCompletion[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "get_entries";
 			success: true;
 			data: { entries: SessionEntry[]; leafId: string | null };
@@ -711,6 +805,13 @@ export type RpcResponse =
 	| {
 			id?: string;
 			type: "response";
+			command: "get_subagent_history";
+			success: true;
+			data: RpcSubagentHistoryResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
 			command: "get_subagent_messages";
 			success: true;
 			data: RpcSubagentMessagesResult;
@@ -730,6 +831,16 @@ export type RpcResponse =
 			command: "set_subagent_fast";
 			success: true;
 			data: { enabled: boolean; active: boolean };
+	  }
+	| { id?: string; type: "response"; command: "get_jobs"; success: true; data: RpcJobsResult }
+	| { id?: string; type: "response"; command: "get_job_output"; success: true; data: RpcJobOutputResult }
+	| { id?: string; type: "response"; command: "cancel_job"; success: true; data: { cancelled: boolean } }
+	| {
+			id?: string;
+			type: "response";
+			command: "set_subagent_model";
+			success: true;
+			data: RpcSetSubagentModelResult;
 	  }
 
 	// Model
@@ -803,6 +914,13 @@ export type RpcResponse =
 			command: "set_role";
 			success: true;
 			data: RpcSetRoleResult;
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "cycle_role";
+			success: true;
+			data: RpcSetRoleResult | null;
 	  }
 	| {
 			id?: string;

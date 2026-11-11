@@ -149,6 +149,13 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
 	},
 	{
+		name: "cycle_role",
+		doc: "Step through the configured role models in `cycleOrder` order like Ctrl+P; null when fewer than two role models are available.",
+		params: { "direction?": "'forward' | 'backward'" },
+		result: { role: "string", model: "ModelInfo", "thinkingLevel?": "ThinkingLevel" },
+		nullable: true,
+	},
+	{
 		name: "get_models_configuration",
 		doc: "Read the native provider catalog, scoped model roles, and effort rules.",
 		result: {
@@ -364,8 +371,14 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		unwrap: "subagents",
 	},
 	{
+		name: "get_subagent_history",
+		doc: "List every child of the root session's tree, live or persisted (finished, parked, aborted), hydrated like the Agent Hub, oldest first.",
+		params: { "includeAdvisors?": "boolean" },
+		result: "SubagentHistory",
+	},
+	{
 		name: "get_subagent_messages",
-		doc: "Read a subagent transcript by id or registered session file (`subagentId` wins).",
+		doc: "Read a subagent transcript by id or session file (`subagentId` wins); persisted children of the root session's tree resolve too.",
 		params: { "subagentId?": "string", "sessionFile?": "string", "fromByte?": "number.integer" },
 		result: "SubagentMessages",
 	},
@@ -391,6 +404,43 @@ export const rpcCommands: readonly RpcCommandSpec[] = [
 		doc: "Enable or disable fast mode only for a running subagent, from its next request.",
 		params: { subagentId: "string", enabled: "boolean" },
 		result: "FastModeResult",
+	},
+	{
+		name: "get_command_completions",
+		doc: "Argument completions of a slash command for hosts without a terminal: subcommands and names such as personalities. `prefix` is the argument text typed after the command name; empty when there are none.",
+		params: { command: "string", prefix: "string" },
+		result: { items: "CommandCompletion[]" },
+		unwrap: "items",
+	},
+	{
+		name: "get_jobs",
+		doc: "List the background jobs of this agent and its subagents (the `/jobs` sheet): running jobs and the newest settled ones.",
+		params: { "recentLimit?": "number.integer" },
+		result: "JobsResult",
+	},
+	{
+		name: "get_job_output",
+		doc: "Read a job's output snapshot (a tail while running, the final result or error once settled) by UTF-8 byte offset.",
+		params: { jobId: "string", "fromByte?": "number.integer", "revision?": "string" },
+		result: "JobOutput",
+	},
+	{
+		name: "cancel_job",
+		doc: "Cancel a running job the session's own agent owns, like the jobs sheet; false when it is not cancellable.",
+		params: { jobId: "string" },
+		result: { cancelled: "boolean" },
+		unwrap: "cancelled",
+	},
+	{
+		name: "set_subagent_model",
+		doc: "Switch a running subagent's model for this session only, from its next request, like the focused `/switch`. Give `selector` (`provider/id`, fuzzy id, `@role`, optional `:level`) or `provider` with `modelId`.",
+		params: { subagentId: "string", "selector?": "string", "provider?": "string", "modelId?": "string" },
+		result: {
+			provider: "string",
+			modelId: "string",
+			"thinkingLevel?": "ThinkingLevel",
+			"warning?": "string",
+		},
 	},
 	{
 		name: "live_start",

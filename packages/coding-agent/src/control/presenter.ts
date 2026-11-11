@@ -25,6 +25,8 @@ export interface ControlPresenter {
 	/** Rewind the session to an entry through the pane's own rewind flow. */
 	rewind(entryId: string, prefillDraft: boolean): Promise<RewindOutcome>;
 	notify(text: string): void;
+	/** The terminal's own speech-to-text (composer microphone, push-to-talk, chord) is recording or starting. */
+	dictationBusy(): boolean;
 	keybindings?: {
 		get(actionId: string): string[];
 		all(): Record<string, string[]>;

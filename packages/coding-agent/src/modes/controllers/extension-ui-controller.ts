@@ -875,10 +875,9 @@ export class ExtensionUiController {
 				isBlocked: () => draftEditor.getText().length > 0,
 				handleInput: (keyData: string) => draftEditor.handleDraftEdit(keyData),
 				hint: "Finish or clear the current prompt to answer",
-				// Show the draft's insertion cursor while it owns input; drop it
-				// once the draft clears and the ask controls take over.
-				syncPresentation: () => {
-					draftEditor.focused = draftEditor.getText().length > 0;
+				// Mirror actual guard ownership, including an explicit handoff to the ask.
+				syncPresentation: (blocked: boolean) => {
+					draftEditor.focused = blocked;
 				},
 			};
 			// Speech input must start, stop and deliver into the composer while a

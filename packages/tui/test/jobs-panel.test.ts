@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, vi, beforeEach, afterEach } from "bun:test";
 import * as os from "node:os";
 import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import {
@@ -371,4 +372,13 @@ describe("JobsSheet", () => {
 			expect(source.cancel).toHaveBeenCalledWith("task-audit");
 		});
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

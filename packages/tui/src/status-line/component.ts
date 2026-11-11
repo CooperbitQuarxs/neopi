@@ -47,6 +47,8 @@ import { col, node, span } from "../native/describe";
 import { getContextMeterThresholds } from "../chrome/context-thresholds";
 import { isNativeRendering, onNativeRenderingChange } from "../native/state";
 import { getSeparator } from "./separators";
+import { ActiveTimeMeter } from "./active-time-meter";
+import { countBackgroundJobsOutsideBadge } from "../overlays/running-subagent-badge";
 import { formatJobWidgetGlance, type JobWidgetEntry, latestJobWidget } from "../tools/job-widget";
 import type {
 	CollabStatus,
@@ -530,29 +532,6 @@ function resolveWorktreeContext(cwd: string): WorktreeContext | null {
 	return { projectName, worktreeName: path.basename(worktree.root) };
 }
 
-/**
- * Per-{@link StatusLineSession} active-processing meter for the `time_spent`
- * segment. `activeMs` is the union of every completed `agent_start`→
- * `agent_end` window; `activeStartedAt` is the start timestamp of the
- * currently-running window, or `null` when idle.
- *
- * `sessionFile` snapshots the loaded session-file path at meter-creation
- * time. `StatusLineSession.switchSession` (/resume, /move, ACP fork, RPC
- * `switch_session`, extension `switchSession`) mutates the loaded file
- * under the same {@link StatusLineSession} ref, so the WeakMap key alone
- * cannot tell two conversations apart. `#meter()` compares this snapshot
- * against the live `session.sessionFile`, and a real-to-real change
- * starts the meter fresh instead of crediting the new conversation with
- * the previous one's accumulated active time. The undefined → real
- * first-save transition does not reset, since the session identity has
- * not changed.
- */
-interface ActiveMeter {
-	activeMs: number;
-	activeStartedAt: number | null;
-	sessionFile: string | undefined;
-}
-
 const EMPTY_MESSAGES: readonly AgentMessage[] = [];
 const STATUS_USAGE_START_DELAY_MS = 0;
 const STATUS_USAGE_REFRESH_TIMEOUT_MS = 2_000;
@@ -743,7 +722,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * dropped from the registry); the main session's meter survives focus
 	 * round-trips because the same {@link StatusLineSession} ref is reused.
 	 */
-	#activeMeters: WeakMap<TSession, ActiveMeter> = new WeakMap();
+	#activeMeters: WeakMap<TSession, ActiveTimeMeter> = new WeakMap();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
 	#loopModeStatus: SegmentContext["loopMode"] = null;
 	#goalModeStatus: { enabled: boolean; paused: boolean } | null = null;
@@ -970,9 +949,9 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 */
 	#closeStaleActiveWindow(): void {
 		const meter = this.#meter();
-		if (meter.activeStartedAt === null) return;
+		if (!meter.running) return;
 		if (this.session.isStreaming) return;
-		meter.activeStartedAt = null;
+		meter.dropWindow();
 	}
 
 	updateSettings(settings: StatusLineSettings): void {
@@ -1039,13 +1018,8 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * badge represents that same agent. Bash and eval jobs always count.
 	 */
 	runningBackgroundJobCount(): number {
-		return (
-			this.session
-				.getAsyncJobSnapshot()
-				?.running.filter(
-					job => job.type !== "task" || job.agentId === undefined || !this.#runningSubagentIds.has(job.agentId),
-				).length ?? 0
-		);
+		const running = this.session.getAsyncJobSnapshot()?.running;
+		return running ? countBackgroundJobsOutsideBadge(running, this.#runningSubagentIds) : 0;
 	}
 
 	/**
@@ -1057,10 +1031,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * will see an idle meter and no-op).
 	 */
 	resetActiveTime(): void {
-		const meter = this.#meter();
-		if (meter.activeMs === 0 && meter.activeStartedAt === null) return;
-		meter.activeMs = 0;
-		meter.activeStartedAt = null;
+		if (!this.#meter().reset()) return;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
 	}
@@ -1073,9 +1044,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * an already-running window) do not double-count.
 	 */
 	markActivityStart(): void {
-		const meter = this.#meter();
-		if (meter.activeStartedAt !== null) return;
-		meter.activeStartedAt = Date.now();
+		if (!this.#meter().start()) return;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
 	}
@@ -1087,10 +1056,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * `agent_end` without guarding.
 	 */
 	markActivityEnd(): void {
-		const meter = this.#meter();
-		if (meter.activeStartedAt === null) return;
-		meter.activeMs += Math.max(0, Date.now() - meter.activeStartedAt);
-		meter.activeStartedAt = null;
+		if (!this.#meter().end()) return;
 		this.#invalidateStatusLineRenderCache();
 		this.#syncActiveWindowRepaint();
 	}
@@ -1101,17 +1067,14 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * context builder; tests assert against this too.
 	 */
 	getActiveMs(): number {
-		const meter = this.#meter();
-		if (meter.activeStartedAt === null) return meter.activeMs;
-		return meter.activeMs + Math.max(0, Date.now() - meter.activeStartedAt);
+		return this.#meter().total();
 	}
 	/**
 	 * Elapsed ms of the currently-open active-processing window, or null when
 	 * idle. Feeds the `pi` segment's working spinner + turn timer.
 	 */
 	getTurnElapsedMs(): number | null {
-		const startedAt = this.#meter().activeStartedAt;
-		return startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+		return this.#meter().windowElapsed();
 	}
 
 	/**
@@ -1124,20 +1087,11 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	 * time. The undefined → real first-save transition only refreshes the
 	 * snapshot — the conversation identity has not changed.
 	 */
-	#meter(): ActiveMeter {
+	#meter(): ActiveTimeMeter {
 		const currentFile = this.session.sessionFile;
 		let meter = this.#activeMeters.get(this.session);
-		if (meter) {
-			const switched =
-				currentFile !== undefined && meter.sessionFile !== undefined && meter.sessionFile !== currentFile;
-			if (switched) {
-				meter = undefined;
-			} else {
-				meter.sessionFile = currentFile;
-			}
-		}
-		if (!meter) {
-			meter = { activeMs: 0, activeStartedAt: null, sessionFile: currentFile };
+		if (!meter?.follows(currentFile)) {
+			meter = new ActiveTimeMeter(currentFile);
 			this.#activeMeters.set(this.session, meter);
 		}
 		return meter;
@@ -2941,7 +2895,7 @@ export class StatusLineComponent<TSession extends StatusLineSession = StatusLine
 	#statusLineClock(nowMs: number, effectiveSettings: EffectiveStatusLineSettings): number {
 		const leftSegments = effectiveSettings.leftSegments;
 		const rightSegments = effectiveSettings.rightSegments;
-		const turnActive = this.#meter().activeStartedAt !== null;
+		const turnActive = this.#meter().running;
 		// The `pi` brand is the only spinner-rate animation: its braille spinner
 		// while a turn runs and its color fade across turn edges. While
 		// focus-proxied it shows the viewed agent's id instead.

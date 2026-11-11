@@ -17,6 +17,7 @@ import { shortenPath, TRUNCATE_LENGTHS, truncateToWidth } from "../render/render
 import { fileHyperlink } from "../render/hyperlink";
 import { getSessionAccentAnsi, getSessionAccentHex } from "../theme/session-color";
 import { summarizeLoopCondition } from "./loop";
+import { shortHostname } from "./short-hostname";
 import { formatMetric } from "../components/metric";
 import { formatBillingSummary } from "./metrics";
 import { sanitizeStatusText } from "../chrome/shared";
@@ -1011,19 +1012,16 @@ const sessionSegment: StatusLineSegment = {
 	},
 };
 
-/** Short (first-label) machine hostname; resolved once — `os.hostname()` is a syscall per call. */
-let shortHostname: string | undefined;
-
 const hostnameSegment: StatusLineSegment = {
 	id: "hostname",
 	render(ctx) {
-		const name = ctx.hostname ?? (shortHostname ??= os.hostname().split(".")[0]);
+		const name = ctx.hostname ?? shortHostname();
 		const content = withIcon(theme.icon.host, name);
 		const ansi = sessionAccentAnsi(ctx);
 		return { content: ansi ? `${ansi}${content}\x1b[39m` : content, visible: true };
 	},
 	describe(ctx) {
-		const name = ctx.hostname ?? (shortHostname ??= os.hostname().split(".")[0]);
+		const name = ctx.hostname ?? shortHostname();
 		return segView([span(name, sessionAccentAnsi(ctx) ? "accent" : undefined)], "host");
 	},
 };

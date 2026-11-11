@@ -279,7 +279,9 @@ Logs go to `~/.omp/logs/npi.YYYY-MM-DD.log` with automatic rotation. Standalone 
 
 ## Menu Navigation
 
-Every menu, picker, overlay, and list surface opens in normal navigation. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport` (`packages/tui/src/components/menu-navigation.ts`); `SelectList` is the reference consumer. Arrows, PageUp/PageDown, Home/End, Enter, and Esc keep working beside the Vim keys.
+Vim navigation is opt-in through the single `tui.vimMode` setting (default `false`), which also enables modal prompt and search editing. With it disabled, menus retain ordinary navigation and literal text editing; do not consume Vim-only motions or advertise them in hints. Read the live preference through `getMenuSearchVimMode()` in `packages/tui/src/components/menu-navigation.ts`, including in direct handlers and native adapters. Arrows, PageUp/PageDown, Home/End, Enter, Esc, search focus, context switching, and menu history remain available independently of Vim mode.
+
+Every menu, picker, overlay, and list surface opens in navigation rather than a text field unless explicitly search-first. Keys resolve through `MenuKeyReader` and the viewport through `MenuViewport`; `SelectList` is the reference consumer. The Vim motion entries below apply only when `tui.vimMode` is enabled; ordinary surface actions remain independent.
 
 | Keys | Meaning in normal navigation |
 | --- | --- |

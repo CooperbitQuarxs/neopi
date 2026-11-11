@@ -3228,6 +3228,7 @@ export class InteractiveMode implements InteractiveModeContext {
 				runAction: id => this.#inputController.runAppAction(id),
 				rewind: (entryId, prefillDraft) => this.#selectorController.rewindToEntry(entryId, { prefillDraft }),
 				notify: text => this.showStatus(text),
+				dictationBusy: () => this.#terminalDictationBusy(),
 				viewTarget: () => {
 					const agentId = this.focusedAgentId;
 					return agentId ? { agentId, session: this.viewSession } : undefined;
@@ -9304,10 +9305,23 @@ export class InteractiveMode implements InteractiveModeContext {
 	/** True when no speech capture is in flight. The space-hold push-to-talk gesture is gated on
 	 *  this so a hold can never engage on top of a capture the `app.stt.toggle` chord started. */
 	get sttIdle(): boolean {
+		return !this.#terminalDictationBusy() && !controlHostFor(this.session)?.dictationActive;
+	}
+
+	/** The terminal's own speech-to-text is recording, transcribing or starting. */
+	#terminalDictationBusy(): boolean {
 		return (
-			(this.#sttController === undefined || this.#sttController.state === "idle") &&
-			(this.#xaiSttController === undefined || this.#xaiSttController.state === "idle")
+			this.#dictationStarting ||
+			(this.#sttController !== undefined && this.#sttController.state !== "idle") ||
+			(this.#xaiSttController !== undefined && this.#xaiSttController.state !== "idle")
 		);
+	}
+
+	/** Refuse the terminal's microphone while a control client records with it; true when refused. */
+	#refuseForControlDictation(): boolean {
+		if (!controlHostFor(this.session)?.dictationActive) return false;
+		this.showStatus("A control client is recording with the microphone");
+		return true;
 	}
 
 	// =====================================================================
@@ -9352,11 +9366,13 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	/** Configured dictation stays on its own shortcut and the Space-hold gesture. */
 	async handleDictationToggle(): Promise<void> {
+		if (this.#refuseForControlDictation()) return;
 		await this.#readySTTController()?.toggle(this.editor, this.#dictationCallbacks(this.editor));
 	}
 
 	/** The composer microphone: start a draft-only capture, or stop (or cancel the start of) the running one. */
 	async #toggleComposerDictation(): Promise<void> {
+		if (this.#refuseForControlDictation()) return;
 		if (this.#dictationStarting || this.#sttController?.state === "recording") {
 			await this.#sttController?.stop();
 			return;
@@ -9504,6 +9520,9 @@ export class InteractiveMode implements InteractiveModeContext {
 	#liveStartBlocker(): string | undefined {
 		if (this.#dictationStarting || (this.#sttController && this.#sttController.state !== "idle")) {
 			return "Finish the current speech-to-text capture before starting live mode.";
+		}
+		if (controlHostFor(this.session)?.dictationActive) {
+			return "A control client is recording with the microphone.";
 		}
 		return undefined;
 	}

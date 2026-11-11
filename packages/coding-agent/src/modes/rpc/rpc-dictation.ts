@@ -4,6 +4,8 @@ import type { RpcDictationFrame } from "./rpc-types";
 
 /** The controller surface used by RPC; tests can substitute the microphone boundary. */
 export type RpcDictationController = Pick<STTController, "state" | "start" | "stop" | "dispose">;
+/** The part of a dictation bridge a command handler drives; control connections supply their own. */
+export type RpcDictationControl = Pick<RpcDictationBridge, "active" | "start" | "stop">;
 export type RpcDictationControllerFactory = (session: AgentSession) => RpcDictationController;
 
 interface Capture {

@@ -123,7 +123,7 @@ import type { MixtureSessionEvent, SessionMixtureHost } from "../moa/host";
 import { isMixtureModel } from "../moa/provider";
 import type { MixtureRun, ResolvedMixture } from "../moa/types";
 import { loadAdvisorTranscriptCosts } from "../advisor";
-import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, AsyncJobManager } from "../async";
+import { ASYNC_JOB_MANAGER_SHUTDOWN_REASON, type AsyncJob, type AsyncJobEvent, AsyncJobManager } from "../async";
 import { classifyAutoPrewalk } from "../auto-prewalk/classifier";
 import { reset as resetCapabilities } from "../capability";
 import type { EffectiveExtensionRoots } from "../capability/types";
@@ -251,6 +251,11 @@ import {
 } from "../secrets/message-transform";
 import type { SecretObfuscator } from "../secrets/obfuscator";
 import { type AgentRef, AgentRegistry } from "../registry/agent-registry";
+import { ActiveTimeMeter } from "@oh-my-pi/pi-tui/status-line/active-time-meter";
+import {
+	countBackgroundJobsOutsideBadge,
+	getRunningSubagentBadgeAgentIds,
+} from "@oh-my-pi/pi-tui/overlays/running-subagent-badge";
 import { cfgSecretsEnabled } from "../secrets/settings";
 import { releaseSharpshooterSession } from "../sharpshooter/backend";
 import { flushSharpshooterExtraction } from "../sharpshooter/extract";
@@ -1099,6 +1104,8 @@ export class AgentSession implements SettingsScope {
 	#runStateListeners = new Set<(state: "running" | "idle") => void>();
 	/** Epoch ms the current run went `running`; undefined while idle. */
 	#runStartedAt: number | undefined;
+	/** Active-processing time of the loaded conversation (see {@link getActiveTimeMs}). */
+	#activeTime = new ActiveTimeMeter();
 	/** The last `agent_end` that {@link #settleAgentEnd} published; a failed maintenance pass settles any other. */
 	#settledAgentEnd: AgentEndEvent | undefined;
 	#humanToolInvocation = false;
@@ -3744,6 +3751,21 @@ export class AgentSession implements SettingsScope {
 		};
 	}
 
+	/**
+	 * Observe the transitions of async jobs in this agent's tree (see {@link getAsyncJobTree}). Foreground-backed
+	 * jobs stay silent until promoted, which is reported as `background`. Returns the unsubscribe.
+	 */
+	subscribeAsyncJobs(
+		listener: (event: { type: AsyncJobEvent["type"]; job: AsyncJobSnapshotItem }) => void,
+	): () => void {
+		const manager = this.#asyncJobManager;
+		if (!manager) return () => {};
+		return manager.subscribe(({ type, job }) => {
+			if (job.foreground || !this.#inJobTree(job, this.#jobTreeParents())) return;
+			listener({ type, job: jobSnapshotItem(job) });
+		});
+	}
+
 	/** Cancel a running async job this session owns; false when there is none by that id. */
 	cancelAsyncJob(id: string): boolean {
 		const job = this.#ownedAsyncJob(id);
@@ -4171,9 +4193,37 @@ export class AgentSession implements SettingsScope {
 		}
 	}
 
+	/** The meter for the loaded conversation; a real-to-real session-file change starts a fresh one. */
+	#activeTimeMeter(): ActiveTimeMeter {
+		if (!this.#activeTime.follows(this.sessionFile)) this.#activeTime = new ActiveTimeMeter(this.sessionFile);
+		return this.#activeTime;
+	}
+
+	/**
+	 * Accumulated active-processing time of this conversation: the sum of its runs (agent start to settle)
+	 * plus the run in flight, never idle time between turns. Starts over for a new or switched session. The
+	 * TUI status line's `time_spent` segment and RPC `get_state.activeTimeMs` use the same meter arithmetic.
+	 */
+	getActiveTimeMs(): number {
+		return this.#activeTimeMeter().total();
+	}
+
+	/**
+	 * Running background jobs outside the subagent badge, as the TUI jobs pill counts them: a task job stops
+	 * counting once its subagent is itself running.
+	 */
+	getRunningBackgroundJobCount(): number {
+		const running = this.getAsyncJobSnapshot()?.running;
+		if (!running) return 0;
+		const subagents = new Set(getRunningSubagentBadgeAgentIds(AgentRegistry.global()));
+		return countBackgroundJobsOutsideBadge(running, subagents);
+	}
+
 	#emitRunState(state: "running" | "idle"): void {
 		if (state === "idle") this.#runStartedAt = undefined;
 		else this.#runStartedAt ??= Date.now();
+		if (state === "idle") this.#activeTimeMeter().end();
+		else this.#activeTimeMeter().start();
 		for (const listener of this.#runStateListeners) {
 			try {
 				listener(state);
@@ -12506,6 +12556,7 @@ export class AgentSession implements SettingsScope {
 					additionalDirectories: cfgWorkspaceAdditionalDirectories.get(this.settings),
 				});
 				await this.settings.attachSessionFile(this.sessionManager.getSessionFile());
+				this.#activeTime = new ActiveTimeMeter(this.sessionFile);
 				this.#bash.markSessionTransition(bashTransition);
 				// The new session owns the transcript from here, so the previous
 				// conversation's advisor spend is retired with it. Clearing at the commit
@@ -16651,8 +16702,8 @@ export class AgentSession implements SettingsScope {
 	 * discovery; the bundled base entry still carries the full long-context
 	 * window, so a fresh session runs with the 1.05M window that contradicts the
 	 * 400K catalog value until the user re-selects the same model. Re-look-up the
-	 * active selector post-discovery and, when its context window changed, fold
-	 * the refreshed spec into the live model. Same selector, so this is a metadata
+	 * active selector post-discovery and, when its context window or advertised
+	 * service tiers changed, fold the refreshed spec into the live model. Same selector, so this is a metadata
 	 * refresh with no provider-session reset; reconcile model-dependent tools and
 	 * append-only state before `model_changed` notifies the status line and RPC
 	 * subscribers. Issue #10488.
@@ -16669,7 +16720,11 @@ export class AgentSession implements SettingsScope {
 		if (!current || !modelsAreEqual(current, boundAtStartup)) return;
 		const found = this.#modelRegistry.find(current.provider, current.id);
 		const refreshed = found && this.#modelRegistry.fitContextWindow(found, this.settings);
-		if (!refreshed || refreshed.contextWindow === current.contextWindow) return;
+		if (
+			!refreshed ||
+			(refreshed.contextWindow === current.contextWindow &&
+				Bun.deepEquals(refreshed.serviceTiers, current.serviceTiers))
+		) return;
 		this.agent.setModel(refreshed);
 		await this.#reconcileModelDependentState(refreshed);
 		if (this.#isDisposed) return;

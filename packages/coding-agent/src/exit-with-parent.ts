@@ -84,7 +84,7 @@ export function exitWithParent(options: ExitWithParentOptions = {}): ExitWithPar
 	let parentExitStarted = false;
 	const armTargetCleanup = (target: ExitWithParentTarget): void => {
 		if (targetCleanupCancels.has(target)) return;
-		const cancel = postmortem.register("exit-with-parent-target", () => tearDownTarget(target, teardownMs));
+		const cancel = postmortem.register("exit-with-parent-target", () => tearDownExitTarget(target, teardownMs));
 		targetCleanupCancels.set(target, cancel);
 	};
 	const watchdog = watchParentProcess({
@@ -141,14 +141,22 @@ async function tearDownGlobalOwnedProcesses(): Promise<void> {
 	await Promise.allSettled([shutdownAllLspClients(), disposeAllKernelSessions(), disposeAllVmContexts()]);
 }
 
-async function tearDownTarget({ session, mcpManager }: ExitWithParentTarget, teardownMs: number): Promise<void> {
+/**
+ * Abort the running turn and tool, dispose the session with its jobs, and disconnect MCP, within
+ * `teardownMs`: the teardown a dead parent triggers, shared with an RPC host that closed its stdin.
+ */
+export async function tearDownExitTarget(
+	{ session, mcpManager }: ExitWithParentTarget,
+	teardownMs: number,
+	abortReason: string = PARENT_EXIT_ABORT_REASON,
+): Promise<void> {
 	// abort() kills the running tool (a foreground bash command) right away;
 	// dispose() reaches MCP and async jobs only after its drain windows, so
 	// those are torn down directly as well. dispose() still has to run: it
 	// alone releases browser tabs, computer sessions, provider state, session
 	// disposers and the persistence flush. The overall deadline bounds it.
 	const work: Promise<unknown>[] = [
-		session.abort({ reason: PARENT_EXIT_ABORT_REASON }),
+		session.abort({ reason: abortReason }),
 		session.dispose({
 			reason: postmortem.Reason.SIGHUP,
 			drainTimeoutMs: teardownMs,
