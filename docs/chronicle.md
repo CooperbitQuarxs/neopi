@@ -18,10 +18,16 @@ Capture automatically catches up the current session when enabled, including whe
 | `/chron unblind` | Continue after the blind marker. The blinded exchange remains excluded. |
 | `/chron off` | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
 | `/chron on` | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded. |
+| `/chron index` | Dispatch a background refresh of this session's captured atoms and their shared ancestors. |
+| `/chron recall "question"` | Dispatch the existing recall tool across sessions and deliver its result automatically. |
 
 These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
 
 Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
+
+Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
+
+`/chron recall` accepts an unquoted question or one outer single/double quote pair, and searches across sessions for historical recollections. This operator command works even when the primary agent has not been granted `chronicle_recall`; the tool's own current-session default is unchanged.
 
 ## The hierarchy
 
@@ -63,6 +69,8 @@ Regenerates only stale nodes, children first. A node is stale when it is missing
 The view root must be dedicated to the view: index refuses a root that is, contains, or sits inside the sessions directory, contains the agent directory (compared by real path, so symlink aliases count), or is a non-empty directory without a valid chronicle `VIEW.json`; it also refuses to write through a symlinked node directory. Refreshing removes entries the view does not recognize, so these checks keep it inside the view. Every `node.json` is hashed over all of its content, so a hand edit to any field — including periods, projects, or sessions — is reported as drift and regenerated.
 
 The report also lists canonical problems without touching atoms: malformed batches (other batches of the session are still indexed), duplicate atom ids, entries committed twice, beats citing uncommitted or missing transcript entries, missing transcripts, and `related`/`supersedes` ids that match no atom. `VIEW.json` is marked incomplete before the first write and complete only when every node settled. Exit status is 1 when a summary failed.
+
+Writers to the same shared view are mutually exclusive across CLI and session commands; a competing index job reports contention instead of overwriting or pruning another writer's output. Dry runs remain read-only.
 
 ## Recall
 
