@@ -7124,9 +7124,19 @@ export const promptAssets: readonly PromptAsset[] = [
 				required: true,
 				resolution: "session-dependent",
 				children: [
-					{ path: "[0]", type: "object", children: [{ path: "jobId", type: "string" }] },
+					{
+						path: "[0]",
+						type: "object",
+						children: [
+							{ path: "jobId", type: "string" },
+							{ path: "namedByCommand", type: "boolean" },
+							{ path: "headerLabel", type: "string" },
+						],
+					},
 					{ path: "jobId", type: "string" },
 					{ path: "label", type: "string" },
+					{ path: "namedByCommand", type: "boolean" },
+					{ path: "headerLabel", type: "string" },
 					{ path: "result", type: "string" },
 					{ path: "schemaStatus", type: "string" },
 					{ path: "schemaStatusLabel", type: "string" },
@@ -7145,6 +7155,8 @@ export const promptAssets: readonly PromptAsset[] = [
 					"[0]": { jobId: "example-1" },
 					jobId: "example-1",
 					label: "Example label",
+					namedByCommand: true,
+					headerLabel: "Example command identity",
 					result: "Example result",
 					schemaStatus: "Example schemaStatus",
 					schemaStatusLabel: "Example schemaStatusLabel",
@@ -7376,6 +7388,27 @@ export const promptAssets: readonly PromptAsset[] = [
 			{ path: "autoProvision", type: "boolean", required: true, resolution: "session-dependent" },
 			{ path: "spawnDefaultAgent", type: "string", required: true, resolution: "session-dependent" },
 			{ path: "spawnAllowedAgentsText", type: "string", required: false, resolution: "session-dependent" },
+			{ path: "perCallModel", type: "boolean", required: true, resolution: "session-dependent" },
+			{
+				path: "perCallModelAdvertisement",
+				type: "object",
+				required: false,
+				resolution: "session-dependent",
+				children: [
+					{
+						path: "roles",
+						type: "object[]",
+						required: true,
+						resolution: "session-dependent",
+						children: [
+							{ path: "role", type: "string", required: true, resolution: "session-dependent" },
+							{ path: "patterns", type: "string[]", required: true, resolution: "session-dependent" },
+						],
+					},
+					{ path: "allowlist", type: "string[]", required: true, resolution: "session-dependent" },
+					{ path: "parentModelWithheld", type: "boolean", required: true, resolution: "session-dependent" },
+				],
+			},
 		],
 		fixture: {
 			py: true,
@@ -7388,6 +7421,12 @@ export const promptAssets: readonly PromptAsset[] = [
 			autoProvision: true,
 			spawnDefaultAgent: "Example spawnDefaultAgent",
 			spawnAllowedAgentsText: "Example spawnAllowedAgentsText",
+			perCallModel: true,
+			perCallModelAdvertisement: {
+				roles: [{ role: "review", patterns: ["mock/reviewer"] }],
+				allowlist: ["mock/reviewer"],
+				parentModelWithheld: false,
+			},
 		},
 		consumerHints: [
 			"packages/coding-agent/src/prompts/tools/eval-agents.md",

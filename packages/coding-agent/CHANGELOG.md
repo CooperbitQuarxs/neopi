@@ -152,6 +152,7 @@
 - Eval `completion()` accepts `provider/model[:effort]` and `@role[:effort]` selectors in addition to the `smol`, `default` and `slow` tiers; bad selectors fail before any request ([#230](https://github.com/PsychedelicShayna/neopi/issues/230)).
 ### Fixed
 
+- Built-in prompt inspection and overrides recognize async-result command headers and eval-agent model advertisements added by the upstream sync.
 - `/defer cancel` no longer waits behind the extension input hook it needs to cancel. Enter and Ctrl+Enter cancel without letting later ordinary submissions overtake that hook.
 - Ask dialogs hide the draft cursor when arrow navigation hands input to the question, without clearing the draft.
 - A speed tier the provider newly advertises for the active model (for example UltraFast) becomes available without re-selecting the model; `/fast ultra` no longer reports it unavailable until restart.

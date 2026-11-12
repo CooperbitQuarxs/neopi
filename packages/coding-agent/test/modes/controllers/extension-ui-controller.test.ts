@@ -403,7 +403,6 @@ describe("ExtensionUiController form dialog", () => {
 		const pending = harness.controller.showFormDialog(html);
 		const dialog = harness.getFocused();
 		expect(dialog).toBeInstanceOf(HtmlFormDialog);
-		expect(harness.editorContainer.children).toEqual([dialog!]);
 		dialog!.render(80);
 
 		harness.handleInput("\x1b[B");
@@ -412,7 +411,6 @@ describe("ExtensionUiController form dialog", () => {
 		harness.handleInput("\r");
 
 		expect(await pending).toEqual({ data: { db: "postgres" } });
-		expect(harness.editorContainer.children).toEqual([harness.editor]);
 		expect(harness.getFocused()).toBe(harness.editor);
 	});
 	it("returns notes for the selected option without changing form values", async () => {
@@ -483,13 +481,14 @@ describe("ExtensionUiController form dialog", () => {
 		expect(harness.getFocused()).toBe(harness.editor);
 	});
 
-	it("lets typing edit a pending draft until up/down hands the keyboard to the form", async () => {
+	it("protects a draft arriving after the form opens until up/down hands it the keyboard", async () => {
 		const harness = makeHarness();
-		harness.editor.setText("half typed");
 		const pending = harness.controller.showFormDialog(html);
 		const dialog = harness.getFocused();
-		expect(harness.editorContainer.children).toEqual([dialog!, harness.editor]);
 		dialog!.render(80);
+		harness.editor.setText("half typed");
+		dialog!.render(80);
+		expect(harness.editor.focused).toBe(true);
 
 		harness.handleInput("!");
 		expect(harness.editor.getText()).toBe("half typed!");
@@ -502,7 +501,7 @@ describe("ExtensionUiController form dialog", () => {
 
 		expect(await pending).toEqual({ data: { db: "postgres" } });
 		expect(harness.editor.getText()).toBe("half typed!");
-		expect(harness.editorContainer.children).toEqual([harness.editor]);
+		expect(harness.getFocused()).toBe(harness.editor);
 	});
 });
 

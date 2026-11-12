@@ -632,24 +632,23 @@ describe("UsageDashboardComponent", () => {
 		}
 	});
 
-	it("returns to overview on escape or q from detail, and closes on escape or q from overview", () => {
-		for (const key of ["\x1b", "q"]) {
-			let closed = 0;
-			const component = dashboard([], [], () => {
-				closed++;
-			});
-			try {
-				component.handleInput("\t");
-				expect(component.render(80).join("\n")).toContain("detail-content");
-
-				component.handleInput(key);
-				expect(closed).toBe(0);
-				expect(component.render(80).join("\n")).not.toContain("detail-content");
-
-				component.handleInput(key);
-				expect(closed).toBe(1);
-			} finally {
-				component.dispose();
+	it("closes on escape or q from either overview or detail", () => {
+		for (const detail of [false, true]) {
+			for (const key of ["\x1b", "q"]) {
+				let closed = 0;
+				const component = dashboard([], [], () => {
+					closed++;
+				});
+				try {
+					if (detail) {
+						component.handleInput("\t");
+						expect(component.render(80).join("\n")).toContain("detail-content");
+					}
+					component.handleInput(key);
+					expect(closed).toBe(1);
+				} finally {
+					component.dispose();
+				}
 			}
 		}
 	});

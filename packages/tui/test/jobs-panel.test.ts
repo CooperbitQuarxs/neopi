@@ -504,11 +504,9 @@ describe("JobsSheet", () => {
 			sheet.render(120);
 
 			snapshot = { rootId: "Main", agents: [], running: [mainBash], recent: [] };
-			const rows = sheet
-				.render(120)
-				.slice(1, 4)
-				.map(line => line.trimEnd());
-			expect(rows).toEqual([
+			const rows = sheet.render(120).map(line => line.trimEnd());
+			const groupStart = rows.findIndex(line => line.trim() === "Gone");
+			expect(rows.slice(groupStart, groupStart + 3)).toEqual([
 				"  Gone",
 				expect.stringMatching(/^> └─ completed {2}bash \S+ {2}gone-done$/),
 				expect.stringMatching(/^ {2}running {2}bash \S+ {2}main-bash$/),
