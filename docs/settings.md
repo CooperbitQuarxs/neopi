@@ -1159,7 +1159,12 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `startup.changelogMode` | enum | `summary` | `summary`, `expanded`, `hidden`: choose startup release-note presentation. |
 | `startup.setupWizard` | boolean | `true` | Show newly added onboarding steps once per setup version. |
 | `btw.inject` | boolean | `false` | `/btw` answers wrap a requested steering prompt in `<inject>…</inject>`, shown highlighted; assign `app.btw.inject` a key to send it to the main session (a steer while it runs, else a new turn). NeoPi keeps `Alt+I` for the IRC viewer. |
-| `update.auto` | boolean | `false` | Install a newer release in the background on interactive startup through the install owner; progress shows after the welcome banner's version and the next launch runs the new build. Ignored under Tern, Nix, and source checkouts. Status and worker log: `~/.omp/update/`. |
+
+NeoPi does not check for or install upstream omp releases. The inherited
+`startup.checkUpdate`, `update.channel`, and `update.auto` settings are no longer
+registered or shown, even when old configuration files retain their values.
+Exact `npi update` keeps the source-fork integration workflow; binary
+self-update is unavailable. `npi update --plugins` still updates plugins.
 
 ### Providers and services
 

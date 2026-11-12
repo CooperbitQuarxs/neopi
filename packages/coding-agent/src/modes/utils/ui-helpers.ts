@@ -3,11 +3,11 @@ import * as path from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, ImageContent, Usage } from "@oh-my-pi/pi-ai";
 import { getStreamingPartialJson } from "@oh-my-pi/pi-ai/utils/block-symbols";
-import { type Component, Text } from "@oh-my-pi/pi-tui";
+import type { Component } from "@oh-my-pi/pi-tui";
 import { RecapNotice } from "@oh-my-pi/pi-tui/chat/recap-notice";
 import { StatusNotice } from "@oh-my-pi/pi-tui/chrome/status-notice";
 import { QueuedMessagesBand } from "@oh-my-pi/pi-tui/prompt/queued-messages";
-import { APP_NAME, logger } from "@oh-my-pi/pi-utils";
+import { logger } from "@oh-my-pi/pi-utils";
 import { previewLine, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import type { AdvisorMessageDetails } from "../../advisor";
 import { InternalUrlRouter } from "../../internal-urls";
@@ -31,7 +31,6 @@ import {
 	createHandoffSummaryMessageComponent,
 } from "@oh-my-pi/pi-tui/chat/compaction-summary-message";
 import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
-import { DynamicBorder } from "@oh-my-pi/pi-tui/chrome/dynamic-border";
 import { EvalExecutionComponent } from "@oh-my-pi/pi-tui/chat/eval-execution";
 import {
 	type LateDiagnosticsFile,
@@ -58,8 +57,7 @@ import {
 	toolRenderName,
 } from "@oh-my-pi/pi-tui/chat/tool-execution";
 import { TranscriptContainer } from "@oh-my-pi/pi-tui/chrome/transcript-container";
-import { noticeRow, TranscriptNotice } from "@oh-my-pi/pi-tui/chrome/transcript-notice";
-import { span } from "@oh-my-pi/pi-tui/native/describe";
+import { TranscriptNotice } from "@oh-my-pi/pi-tui/chrome/transcript-notice";
 import { createUsageRowBlock, turnElapsedMs } from "@oh-my-pi/pi-tui/overlays/usage-row";
 import { UserMessageComponent } from "@oh-my-pi/pi-tui/chat/user-message";
 import { decodeStreamedToolArgs, streamingStringKeysForTool } from "../../modes/controllers/tool-args-reveal";
@@ -1326,20 +1324,6 @@ export class UiHelpers {
 	showWarning(warningMessage: string, options?: { hideWithToolActivity?: boolean }): void {
 		const notice = TranscriptNotice.line("warning", warningMessage);
 		this.ctx.present(options?.hideWithToolActivity ? new ToolActivityContainer(notice) : notice);
-	}
-
-	showNewVersionNotification(newVersion: string): void {
-		const title = "Update Available";
-		const prefix = `New version ${newVersion} is available. Run: `;
-		const command = `${APP_NAME} update`;
-		const native = noticeRow("info", [span("Update available", "strong"), span(` · New version ${newVersion} is available. Run `), span(command, "code")], { icon: "download" });
-		this.ctx.present(
-			new TranscriptNotice(native, [
-				new DynamicBorder(text => theme.fg("warning", text)),
-				new Text(`${title}\n${prefix}${command}`, 1, 0).setStyleFn(() => `${theme.bold(theme.fg("warning", title))}\n${theme.fg("muted", prefix)}${theme.fg("accent", command)}`),
-				new DynamicBorder(text => theme.fg("warning", text)),
-			]),
-		);
 	}
 
 	updatePendingMessagesDisplay(): void {

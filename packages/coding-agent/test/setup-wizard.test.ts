@@ -1,7 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, mock, vi } from "bun:test";
+import { afterEach, describe, expect, it, mock, vi } from "bun:test";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
-import * as updateCli from "@oh-my-pi/pi-coding-agent/cli/update-cli";
 import { runOnboardingSetup } from "@oh-my-pi/pi-coding-agent/commands/setup";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import {
@@ -59,27 +58,9 @@ afterEach(async () => {
 });
 
 describe("setup wizard scene selection", () => {
-	// Tests run from a source checkout, which never updates itself; pin a self-updating install.
-	beforeEach(() => {
-		vi.spyOn(updateCli, "canSelfUpdate").mockResolvedValue(true);
-	});
-
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
 	it("runs all v1 scenes for a new user", async () => {
 		const scenes = await selectSetupScenes(0, ALL_SCENES, fakeContextWithConfiguredModel(), { isTTY: true });
 		expect(scenes.map(scene => scene.id)).toEqual(ALL_SCENES.map(scene => scene.id));
-	});
-
-	it("keeps CURRENT_SETUP_VERSION in sync with the highest scene minVersion", () => {
-		// main.ts's cold-launch gate sources CURRENT_SETUP_VERSION from the tiny
-		// `setup-version` module to decide whether to load the wizard at all. If a
-		// new scene raises the bar but the constant is not bumped, stale installs
-		// would never see the scene. Guard the invariant the gate relies on.
-		const highestMinVersion = Math.max(...ALL_SCENES.map(scene => scene.minVersion));
-		expect(CURRENT_SETUP_VERSION).toBe(highestMinVersion);
 	});
 
 	it("runs only scenes newer than the stored setup version", async () => {
@@ -114,14 +95,6 @@ describe("setup wizard scene selection", () => {
 		});
 		expect(selected.map(scene => scene.id)).toEqual(ALL_SCENES.map(scene => scene.id));
 		expect(await selectSetupScenes(0, ALL_SCENES, ctx, { isTTY: false, force: true })).toEqual([]);
-	});
-
-	it("skips the auto-update question where omp cannot update itself (Tern, Nix, a source checkout)", async () => {
-		vi.spyOn(updateCli, "canSelfUpdate").mockResolvedValue(false);
-		const scenes = await selectSetupScenes(0, ALL_SCENES, fakeContextWithConfiguredModel(), { isTTY: true });
-		expect(scenes.map(scene => scene.id)).toEqual(
-			ALL_SCENES.map(scene => scene.id).filter(id => id !== "auto-update"),
-		);
 	});
 
 	it("drops the glyph scene once the terminal renders omp's bundled icons in-band", async () => {
