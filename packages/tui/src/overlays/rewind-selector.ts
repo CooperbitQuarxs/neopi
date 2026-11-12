@@ -200,7 +200,7 @@ const SLIDE_MS = 160;
 const NORMAL_MOTION_HINTS: readonly NativeHint[] = [
 	{ keys: ["tab", "shift+tab"], label: "context" },
 	{ keys: ["?"], label: "help" },
-	{ keys: [], label: "hjkl gg/G C-u d e y" },
+	{ keys: [], label: "↑/↓ ←/→ Home/End PgUp/PgDn" },
 ];
 
 /** Same length and identical elements (or both undefined). */
@@ -236,7 +236,7 @@ export class RewindSelectorComponent implements Component {
 	readonly #search = new MenuSearchField();
 	readonly #help = new MenuHelp(
 		undefined,
-		"h/l switch branches at a fork, or jump between user turns. Enter rewinds; Space never rewinds.",
+		"Left/Right switch branches at a fork, or jump between user turns. Enter rewinds; Space never rewinds.",
 	);
 	#width = 0;
 	#pageStarts: number[] = [];

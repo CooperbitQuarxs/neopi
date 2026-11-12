@@ -2,7 +2,7 @@ import { uiProvenanceSuffix } from "./theme/provenance";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import { type AppKeybinding, formatKeyHint, type KeybindingsManager, keyHintPlatform } from "./app-keybindings";
 import { Markdown } from "./components/markdown";
-import { MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
+import { getMenuSearchVimMode, MenuKeyReader, menuScrollBy } from "./components/menu-navigation";
 import { MenuHelp, menuHintLines } from "./components/menu-hints";
 import { ScrollView } from "./components/scroll-view";
 import { matchesSelectCancel } from "./keybinding-matchers";
@@ -254,6 +254,7 @@ export class HotkeysSheetComponent implements Component {
 	readonly #onClose: () => void;
 	#native: NativeNode | undefined;
 	#markdown: Markdown | undefined;
+	#vimMode = getMenuSearchVimMode();
 	readonly #keys = new MenuKeyReader();
 	readonly #help = new MenuHelp("jk gg/G C-u d e y PgUp/PgDn");
 	readonly #viewport = new ScrollView([], { height: 1 });
@@ -268,7 +269,16 @@ export class HotkeysSheetComponent implements Component {
 		this.#onClose = onClose;
 	}
 
+	#syncVimMode(): void {
+		const vim = getMenuSearchVimMode();
+		if (vim === this.#vimMode) return;
+		this.#vimMode = vim;
+		this.#native = undefined;
+		this.#markdown = undefined;
+	}
+
 	describe(): NativeNode {
+		this.#syncVimMode();
 		if (this.#help.open) return this.#help.describe();
 		if (this.#native) return this.#native;
 		const sections = hotkeyGroups(this.#bindings).map((group, index) =>
@@ -293,9 +303,17 @@ export class HotkeysSheetComponent implements Component {
 		);
 		const close = actionButton("Close", "close", { keys: "escape" });
 		this.#native = {
-			...col([...sections, actionBar([close, null, text([span("? help   jk gg/G C-u d e y PgUp/PgDn", "dim")])])], {
-				gap: "lg",
-			}),
+			...col(
+				[
+					...sections,
+					actionBar([
+						close,
+						null,
+						text([span(getMenuSearchVimMode() ? "? help   jk gg/G C-u d e y PgUp/PgDn" : "? help   ↑/↓ Home/End PgUp/PgDn", "dim")]),
+					]),
+				],
+				{ gap: "lg" },
+			),
 			scroll: this.#nativeScroll,
 		};
 		return this.#native;
@@ -303,6 +321,7 @@ export class HotkeysSheetComponent implements Component {
 
 	/** The markdown reference, for a terminal that falls back to rows. */
 	render(width: number): readonly string[] {
+		this.#syncVimMode();
 		this.#markdown ??= new Markdown(buildHotkeysMarkdown(this.#bindings), 1, 1, getMarkdownTheme());
 		const footer = menuHintLines("Esc close · ? help", width, this.#help.vim);
 		this.#viewport.setHeight(Math.max(1, this.getHeight() - 4 - footer.length));

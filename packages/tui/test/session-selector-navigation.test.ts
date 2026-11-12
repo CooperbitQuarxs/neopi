@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "bun:test";
 import {
 	SessionSelectorComponent,
 	type SessionSelectorEntry,
@@ -324,4 +325,13 @@ describe("session selector Vim navigation and safe history", () => {
 			selector.dispose();
 		}
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

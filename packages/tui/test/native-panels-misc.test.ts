@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, describe, expect, it, setSystemTime, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, setSystemTime, vi } from "bun:test";
 import type { ImageContent } from "@oh-my-pi/pi-ai";
 import { KeybindingsManager } from "../src/app-keybindings";
 import { MoveOverlay, type MoveOverlayResult } from "../src/overlays/move-overlay";
@@ -574,4 +575,13 @@ describe("CodexResetFireworks under a native surface", () => {
 		// One paint to show the overlay; no 85ms frame ticks.
 		expect(renders).toBe(1);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

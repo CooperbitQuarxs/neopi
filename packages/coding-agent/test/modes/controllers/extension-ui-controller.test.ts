@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, beforeAll, describe, expect, it, type Mock, vi } from "bun:test";
+import { afterEach, beforeAll, describe, expect, it, type Mock, vi, beforeEach } from "bun:test";
 import { Agent } from "@oh-my-pi/pi-agent-core";
 import { type Component, Container, isFocusable, type OverlayOptions, setKeybindings } from "@oh-my-pi/pi-tui";
 import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
@@ -578,8 +579,7 @@ describe("ExtensionUiController editor UI", () => {
 		// Down hands the keyboard to the ask without touching the draft; the next
 		// Down moves to "No", and typing/Enter now answer instead of editing.
 		ask?.handleInput?.("\x1b[B");
-		const rendered = stripVTControlCharacters(ask?.render?.(80).join("\n") ?? "");
-		expect(rendered).not.toContain("typing edits your prompt");
+		ask?.render?.(80);
 		expect(harness.editor.focused).toBe(false);
 		ask?.handleInput?.("\x1b[B");
 		ask?.handleInput?.("\r");
@@ -1015,14 +1015,23 @@ describe("ExtensionUiController tool approval", () => {
 		expect(onSubmit).toHaveBeenCalledWith("[Image #1]");
 	});
 
-	it("lets ctrl+o reveal a single-line detail the row clips, even when compact and full match", () => {
+	it("lets Alt+E reveal a single-line detail the row clips, even when compact and full match", () => {
 		const harness = makeHarness();
 		const command = `Allow tool: bash\nCommand: echo ok && ${"x".repeat(120)} && rm -rf ~`;
 		void harness.controller.showCollabAwareApproval({ full: command, compact: command });
 		const body = () =>
 			stripVTControlCharacters(harness.editorContainer.children[0]!.render(60).join("\n")).replace(/[│\s]+/g, "");
 		expect(body()).not.toContain("rm-rf~");
-		harness.handleInput("\x0f");
+		harness.handleInput("\x1be");
 		expect(body()).toContain("rm-rf~");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

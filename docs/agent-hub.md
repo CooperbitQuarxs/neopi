@@ -43,6 +43,8 @@ Metrics depend on the progress or persisted usage data available for that agent.
 
 ### Roster controls
 
+Vim navigation is off by default. Enable **Vim Navigation and Editing** in `/settings`, or set `tui.vimMode: true`, to use `j`/`k` and the shared Vim menu/viewer motions. Arrows, the mouse, ordinary paging, search, activation and the Hub's surface actions remain available without opting in.
+
 | Key or input                | Action                                                                       |
 | --------------------------- | ---------------------------------------------------------------------------- |
 | `j` / `k`, `↑` / `↓`, wheel | Select an agent.                                                             |

@@ -1,4 +1,5 @@
-import { beforeAll, describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { SessionSelectorComponent } from "@oh-my-pi/pi-tui/overlays/session-selector";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { SessionInfo } from "@oh-my-pi/pi-coding-agent/session/session-listing";
@@ -26,7 +27,7 @@ function createSession(id: string, title: string, cwd: string, parentSessionPath
 const TAB = "\t";
 
 describe("SessionSelectorComponent scope toggle", () => {
-	it("navigates rows with j/k and preserves literal hjkl filter text until the second Escape", () => {
+	it("navigates rows with j/k and leaves Vim Insert before discarding a literal filter", () => {
 		const selected: string[] = [];
 		let cancelled = 0;
 		const selector = new SessionSelectorComponent(
@@ -41,10 +42,13 @@ describe("SessionSelectorComponent scope toggle", () => {
 		selector.handleInput("k");
 		selector.handleInput("/");
 		for (const key of "hjkl") selector.handleInput(key);
-		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "hjkl", focused: true } } });
 		selector.handleInput("\x1b");
 		expect(cancelled).toBe(0);
-		expect(Bun.stripANSI(selector.render(120).join("\n"))).toContain("hjkl");
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "hjkl", focused: true } } });
+		selector.handleInput("\x1b");
+		expect(cancelled).toBe(0);
+		expect(selector.navigationSnapshot()).toMatchObject({ list: { search: { value: "", focused: false } } });
 		selector.handleInput("\x1b");
 		expect(cancelled).toBe(1);
 	});
@@ -182,4 +186,13 @@ describe("SessionSelectorComponent scope toggle", () => {
 		expect(forkLines).toHaveLength(1);
 		expect(forkLines[0]).toContain("fork");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

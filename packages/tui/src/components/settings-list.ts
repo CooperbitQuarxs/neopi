@@ -284,7 +284,7 @@ export class SettingsList implements Component {
 	navigationSnapshot(): SettingsListNavigationState {
 		return {
 			selectedId: this.#selection.selectedKey,
-			filter: this.#filterQuery,
+			filter: this.#search.confirmedQuery,
 			filterFocused: this.#search.focused,
 			filterCursor: this.#search.cursor,
 			...(this.#search.focused ? { filterDraft: this.#search.value } : {}),
@@ -299,6 +299,7 @@ export class SettingsList implements Component {
 
 	leaveMenu(): void {
 		this.#search.focused = false;
+		if (this.#filterQuery !== this.#search.query) this.#setFilter(this.#search.query);
 		if (isMenuHistoryLeaver(this.#submenuComponent)) this.#submenuComponent.leaveMenu();
 	}
 

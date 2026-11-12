@@ -1946,7 +1946,7 @@ export class TreeSelectorComponent extends OverlayPanel {
 				{ keys: ["home", "end"], label: "first/last" },
 				{ keys: ["shift+enter"], label: "summarize & switch" },
 				{ keys: ["e"], label: "label" },
-				{ keys: ["h", "l", "left", "right"], label: "collapse/parent · expand" },
+				{ keys: ["left", "right"], label: "collapse/parent · expand" },
 				{ keys: ["space"], label: "toggle expansion" },
 				{ keys: ["tab", "shift+tab"], label: "filter mode" },
 				{ keys: ["/"], label: "search" },

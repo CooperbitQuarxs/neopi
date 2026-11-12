@@ -6,6 +6,29 @@ Atoms stay the only source of truth. The view is a cache: deleting it loses noth
 
 Capture automatically catches up the current session when enabled, including when a stored session is resumed. Cross-session indexing and stored-session backfill run only when requested through `npi chronicle index` and `npi chronicle backfill`; neither has a periodic scheduler.
 
+## Session controls: `/chron`
+
+`/chron` (or `/chron status`) shows Luna's effective state for the current session.
+
+| Command | Effect |
+| --- | --- |
+| `/chron pause` | Stop ingest while retaining her context window. `/chron resume` catches up on the paused exchange. |
+| `/chron resume` | Resume paused ingest. Does not lift a blind span; use `/chron unblind` for that. |
+| `/chron blind` | Stop ingest and exclude the exchange until `/chron unblind`, including future catch-up and backfill. |
+| `/chron unblind` | Continue after the blind marker. The blinded exchange remains excluded. |
+| `/chron off` | Ask for confirmation before disabling her and wiping her context window. Headless hosts require `/chron off --confirm`. |
+| `/chron on` | Enable her for this session and explain her role to the primary agent. Existing blind spans stay excluded. |
+| `/chron index` | Dispatch a background refresh of this session's captured atoms and their shared ancestors. |
+| `/chron recall "question"` | Dispatch the existing recall tool across sessions and deliver its result automatically. |
+
+These commands do not change the saved `chronicler.enabled` setting. Off does not delete existing beats, and later enabling may catch up on unblinded exchanges. Blind metadata is stored only under the session's `chronicler/` directory, not in the primary agent's transcript. An open blind survives restart. Unblinding never retroactively authorizes capture of its span; there is no implicit retroactive lift.
+
+Every control transition sends the primary agent a system notice without starting or interrupting a turn. Set `chronicler.notices` to `false` in **Settings > Memory > Chronicler > Tell the primary agent** to suppress them. Notices are on by default. Nightly notices explain the controls this build actually supports; they do not promise direct addressing of Luna.
+
+Index and recall commands are explicit background jobs and do not change ingest state. `/chron index` reads the full shared corpus to retain other sessions' atoms, but only regenerates stale nodes containing the current session. If an unrelated stale subtree blocks a shared ancestor, it remains stale and the view is reported incomplete; run `npi chronicle index` for an all-session refresh. A session with no captured atoms does not trigger an unscoped index run.
+
+`/chron recall` accepts an unquoted question or one outer single/double quote pair, and searches across sessions for historical recollections. This operator command works even when the primary agent has not been granted `chronicle_recall`; the tool's own current-session default is unchanged.
+
 ## The hierarchy
 
 ```
@@ -47,6 +70,8 @@ The view root must be dedicated to the view: index refuses a root that is, conta
 
 The report also lists canonical problems without touching atoms: malformed batches (other batches of the session are still indexed), duplicate atom ids, entries committed twice, beats citing uncommitted or missing transcript entries, missing transcripts, and `related`/`supersedes` ids that match no atom. `VIEW.json` is marked incomplete before the first write and complete only when every node settled. Exit status is 1 when a summary failed.
 
+Writers to the same shared view are mutually exclusive across CLI and session commands; a competing index job reports contention instead of overwriting or pruning another writer's output. Dry runs remain read-only.
+
 ## Recall
 
 ```
@@ -79,6 +104,7 @@ Backfill command flags override their matching settings. Its `pollMs` setting on
 
 | Setting | Default | Meaning |
 |---|---|---|
+| `chronicler.notices` | `true` | Tell the primary agent when Luna's capture state changes. |
 | `chronicler.recall.enabled` | `false` | Grant `chronicle_recall` to top-level sessions. Subagents and advisors get it only by naming it in their tool lists. |
 | `chronicler.index.dir` | `<agentDir>/chronicle` | View root. |
 | `chronicler.index.timezone` | system zone | IANA zone for calendar buckets. |

@@ -1,5 +1,6 @@
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import * as os from "node:os";
-import { beforeAll, describe, expect, it } from "bun:test";
+import { beforeAll, describe, expect, it, beforeEach, afterEach } from "bun:test";
 import type { DescribeContext } from "../src/native/node";
 import type { TspText } from "@oh-my-pi/pi-wire";
 import type { DailyActivityPoint, UnavailableUsageAccount } from "@oh-my-pi/pi-tui/overlays/usage-dashboard";
@@ -665,4 +666,13 @@ describe("formatActivityErrorDetail", () => {
 		const input = `Error: failed to open ${home}/.omp/stats.db...`;
 		expect(formatActivityErrorDetail(input, home)).toBe("Error: failed to open ~/.omp/stats.db");
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

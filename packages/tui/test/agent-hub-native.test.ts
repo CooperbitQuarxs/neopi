@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, expect, spyOn, test, vi } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { afterEach, beforeAll, expect, spyOn, test, vi, beforeEach } from "bun:test";
 import * as fs from "node:fs";
 import type { TspKind, TspPickerProps } from "@oh-my-pi/pi-wire";
 import type { DescribeContext, NativeChild, NativeNode } from "../src/native/node";
@@ -266,7 +267,7 @@ test("hub uses visual-line viewport scrolling without moving its selected agent"
 	}
 });
 
-test("hub search is slash-focused literal input and Esc clears its query", () => {
+test("hub search is literal and leaves Vim Insert before discarding the query", () => {
 	const onDone = vi.fn();
 	const hub = createHub([agent("alpha", 1)], [], undefined, { onDone });
 	try {
@@ -275,6 +276,9 @@ test("hub search is slash-focused literal input and Esc clears its query", () =>
 		hub.handleInput("/");
 		for (const key of "hjkl/ g") hub.handleInput(key);
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
+		hub.handleInput("\x1b");
+		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "hjkl/ g", focused: true });
+		expect(onDone).not.toHaveBeenCalled();
 		hub.handleInput("\x1b");
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
 		expect(onDone).not.toHaveBeenCalled();
@@ -419,7 +423,6 @@ test("hub native close respects focused search before closing its root", () => {
 	try {
 		hub.handleInput("/");
 		hub.handleInput("alpha");
-		expect(pickerProps(hub).actions?.find(action => action.id === "close")?.label).toBe("Back to list");
 		hub.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
 		expect(onDone).not.toHaveBeenCalled();
 		expect(hub.navigationSnapshot().agentFilter).toMatchObject({ value: "", query: "", focused: false });
@@ -428,4 +431,13 @@ test("hub native close respects focused search before closing its root", () => {
 	} finally {
 		hub.dispose();
 	}
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });

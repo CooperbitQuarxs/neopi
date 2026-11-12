@@ -5,10 +5,13 @@
 ### Breaking Changes
 
 - Renamed the fork to NeoPi and its executable to `npi`; existing `.omp` configuration and provider compatibility remain unchanged.
+- Vim navigation across menus, pickers and viewers is now opt-in through the existing `tui.vimMode` setting (off by default), alongside modal prompt and search editing; enable **Vim Navigation and Editing** in `/settings`.
 - The Mixture of Agents command is now `/moa`; `/mixture` is no longer a command. Slash-command completion, the command lists sent to ACP and control clients, the usage text, and the pause notice name `/moa`, while `mixture/<name>` model ids, `MIXTURES.toml`, and `moa.*` settings are unchanged ([#366](https://github.com/PsychedelicShayna/neopi/issues/366)).
 
 ### Added
 
+- Run `/chron index` to refresh the current session's captured atoms without replacing other sessions' shared view, or `/chron recall "question"` to dispatch historical recall across sessions; results arrive as background jobs ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
+- Control Luna with `/chron pause`, `resume`, `blind`, `unblind`, `off`, `on` and `status`; pauses retain her context and catch up, blind spans stay excluded across restarts and backfill, and off requires confirmation. Transition notices default on and can be disabled with `chronicler.notices` ([#46](https://github.com/PsychedelicShayna/neopi/issues/46)).
 - `--exit-with-parent` now works for `--mode rpc` / `rpc-ui` (capability `exit_with_parent`): a host-owned process aborts and exits within seconds when its host dies or closes stdin, instead of draining accepted work; the default drain is unchanged ([#687](https://github.com/PsychedelicShayna/neopi/issues/687)).
 - The `abort_and_restore_queue` capability is advertised in the RPC and control `ready` frames, so hosts can gate the atomic Esc queue restore and fall back to `abort` on older NeoPi ([#685](https://github.com/PsychedelicShayna/neopi/issues/685)).
 - `get_job_output` takes and returns a `revision`, so a host reading a running job's rolling output tail resets to a full snapshot when the text was replaced instead of keeping stale or spliced output ([#665](https://github.com/PsychedelicShayna/neopi/issues/665)).
@@ -150,6 +153,7 @@
 ### Fixed
 
 - `/defer cancel` no longer waits behind the extension input hook it needs to cancel. Enter and Ctrl+Enter cancel without letting later ordinary submissions overtake that hook.
+- Ask dialogs hide the draft cursor when arrow navigation hands input to the question, without clearing the draft.
 - A speed tier the provider newly advertises for the active model (for example UltraFast) becomes available without re-selecting the model; `/fast ultra` no longer reports it unavailable until restart.
 - NeoProxy models are selected as `neoproxy/<name>` with one prefix (for example `neoproxy/anthropic-npi/claude-opus-5-5`) instead of `neoproxy/neoproxy/<name>`; requests still send the name NeoProxy advertises, and per-key routing is unchanged. Selectors saved with the doubled prefix need updating.
 - Reconnecting an existing API key immediately adopts its newly confirmed CA and origin restrictions instead of retaining stale trust until restart.

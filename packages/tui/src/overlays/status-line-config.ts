@@ -316,7 +316,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 	readonly #titleRow = new PanelRows();
 	readonly #divider = new PanelRows();
 	readonly #footer = new PanelRows();
-	readonly #help = new MenuHelp(undefined, "h/l move the selected widget within the layout.");
+	readonly #help = new MenuHelp(undefined, "Left/Right move the selected widget within the layout.");
 	readonly #bottom = new PanelRows();
 	readonly #split = new SplitPane({
 		left: (width, height) => this.#renderList(width, height ?? this.#bodyRows),

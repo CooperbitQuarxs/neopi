@@ -1,4 +1,5 @@
-import { describe, expect, it } from "bun:test";
+import { getMenuSearchVimMode, setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
+import { describe, expect, it, beforeEach, afterEach } from "bun:test";
 import { SettingsFormField, SettingsList, type SettingsListTheme } from "../src/components/settings-list";
 import { TextFormField } from "../src/components/form";
 
@@ -63,8 +64,10 @@ describe("SettingsList host-decoded navigation", () => {
 		field.handleInput("/");
 		expect(field.filterFocused).toBe(true);
 		field.handleInput("jkgG/ ");
-		expect(field.settingsList.getSearchQuery()).toBe("");
+		expect(field.settingsList.getSearchQuery()).toBe("jkgG/ ");
 		expect(field.settingsList.navigationSnapshot().filterDraft).toBe("jkgG/ ");
+		field.handleInput("\x1b");
+		expect(field.filterFocused).toBe(true);
 		field.handleInput("\x1b");
 		expect(field.filterFocused).toBe(false);
 		field.settingsList.clearSearch();
@@ -183,4 +186,13 @@ describe("SettingsList host-decoded navigation", () => {
 		expect(list.getSelectedItem()?.currentValue).toBe("off");
 		expect(changed).toEqual([]);
 	});
+});
+
+let previousVimMode: boolean;
+beforeEach(() => {
+	previousVimMode = getMenuSearchVimMode();
+	setMenuSearchVimMode(true);
+});
+afterEach(() => {
+	setMenuSearchVimMode(previousVimMode);
 });
