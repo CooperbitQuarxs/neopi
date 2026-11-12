@@ -1,4 +1,4 @@
-import { uiProvenanceSuffix } from "../theme/provenance";
+import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 /**
  * Frameless, reusable model browser: a fuzzy search row, a windowed model
  * list with role chips and metadata columns, and a selection detail block.
@@ -756,7 +756,7 @@ export function rankModelItems(
  */
 export function formatRoleChip(role: string, assignment: RoleAssignment, settings: ModelBrowserSource): string {
 	const info = settings.getRoleInfo(role);
-	const label = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
+	const label = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role, true);
 	const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 	const suffix = glyph ? ` ${theme.fg("dim", glyph)}` : "";
 	if (assignment.autoSelected) {
@@ -768,11 +768,14 @@ export function formatRoleChip(role: string, assignment: RoleAssignment, setting
 /** {@link formatRoleChip} as styled spans for a described node. */
 function roleChipSpans(role: string, assignment: RoleAssignment, settings: ModelBrowserSource): TspSpan[] {
 	const info = settings.getRoleInfo(role);
-	const label = (info.tag ?? info.name ?? role).toLowerCase() + uiProvenanceSuffix("roles", role);
+	const label = (info.tag ?? info.name ?? role).toLowerCase();
 	const glyph = thinkingLevelGlyph(assignment.thinkingLevel, theme);
 	const spans = assignment.autoSelected
 		? [span(`${theme.status.shadowed} ${label}`, "dim")]
 		: [span(`${theme.status.enabled} ${label}`, info.color ?? "muted")];
+	if (uiProvenance("roles", role)) {
+		spans.push(span(uiProvenanceSuffix("roles", role), provenanceColor(uiProvenance("roles", role))));
+	}
 	if (glyph) spans.push(span(` ${glyph}`, "dim"));
 	return spans;
 }

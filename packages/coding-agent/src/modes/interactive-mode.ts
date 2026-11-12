@@ -93,6 +93,7 @@ import { KeybindingsManager } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey, rawKeyHint } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
 import { formatModelString, type ResolvedModelRoleValue, resolveModelRoleValue } from "../config/model-resolver";
 import { isSettingsInitialized, Settings, settings, type SettingsScope } from "../config/settings";
+import { entryProvenance } from "../config/entry-provenance";
 import { SESSION_SETTINGS_QUIT_CHOICES, settleSessionSettingsOnQuit } from "../config/session-settings-quit";
 import { clearClaudePluginRootsCache } from "../discovery/helpers";
 import type {
@@ -3422,6 +3423,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		).map(cmd => ({
 			name: cmd.name,
 			description: cmd.description ?? "(hook command)",
+			provenance: cmd.provenance,
 			icon: getSlashCommandTypeIcon("extension"),
 			iconName: "extension",
 			getArgumentCompletions: cmd.getArgumentCompletions,
@@ -3456,10 +3458,15 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 
 		const toolCommands: SlashCommand[] = [
-			{ name: "tool:", description: "Browse enabled tools without invoking them" },
+			{
+				name: "tool:",
+				description: "Browse enabled tools without invoking them",
+				provenance: entryProvenance("commands", "tool"),
+			},
 			...this.session.getToolCatalogEntries().map(tool => ({
 				name: `tool:${tool.name}`,
 				description: tool.description,
+				provenance: entryProvenance("commands", "tool"),
 				icon: getSlashCommandTypeIcon("tools"),
 				iconName: "tools" as const,
 				getArgumentCompletions: (text: string) => {
@@ -8653,13 +8660,14 @@ export class InteractiveMode implements InteractiveModeContext {
 			const proceed = await settleSessionSettingsOnQuit(
 				this.settings,
 				async choices => {
-					const choice = options?.cancellable === false || signal.aborted
-						? undefined
-						: await this.#extensionUiController.showCollabAwareSelector(
-								"Session settings changed — Esc keeps them in the session directory and quits",
-								[...choices],
-								{ signal },
-							);
+					const choice =
+						options?.cancellable === false || signal.aborted
+							? undefined
+							: await this.#extensionUiController.showCollabAwareSelector(
+									"Session settings changed — Esc keeps them in the session directory and quits",
+									[...choices],
+									{ signal },
+								);
 					// An abandoned UI must not materialize or settle session settings.
 					if (this.session.isDisposed || this.#dialogLifetime.signal.aborted)
 						return SESSION_SETTINGS_QUIT_CHOICES[3];
