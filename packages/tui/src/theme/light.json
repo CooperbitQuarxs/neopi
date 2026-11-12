@@ -19,6 +19,7 @@
 	},
 	"colors": {
 		"accent": "teal",
+		"provenancePurple": "#7e3fa1",
 		"provenanceGold": "#946300",
 		"provenanceSilver": "#586777",
 		"provenanceBronze": "#925326",

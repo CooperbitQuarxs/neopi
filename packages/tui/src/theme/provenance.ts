@@ -6,7 +6,7 @@ import { theme } from "./theme";
 export type EntryProvenance = "nightly" | "stable" | "gold" | "silver" | "bronze";
 
 const PROVENANCE_COLORS = {
-	nightly: "accent",
+	nightly: "provenancePurple",
 	stable: "success",
 	gold: "provenanceGold",
 	silver: "provenanceSilver",
@@ -37,8 +37,9 @@ export function createProvenanceLookup<Kind extends string>(data: ProvenanceEntr
 		for (const id of data.fork.stable[kind]) entries.set(id, "stable");
 		for (const id of data.fork.nightly[kind]) entries.set(id, "nightly");
 		// Upstream adoption supersedes a historical fork classification.
-		for (let index = Math.min(data.upstream.length, tiers.length) - 1; index >= 0; index--) {
-			for (const id of data.upstream[index]!.entries[kind]) entries.set(id, tiers[index]!);
+		for (let index = data.upstream.length - 1; index >= 0; index--) {
+			for (const id of data.upstream[index]!.entries[kind])
+				entries.set(id, tiers[Math.min(index, tiers.length - 1)]!);
 		}
 		lookup.set(kind, entries);
 	}

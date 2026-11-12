@@ -22,7 +22,7 @@ test("provenance leaves command names, aliases and type icons usable", () => {
 	expect(completion.lines).toEqual(["/identity "]);
 });
 
-test("prepending synced ranges ages gold through silver and bronze, then expires it", () => {
+test("synced ranges age gold through silver and retain every older cohort as bronze", () => {
 	const first = { entries: { commands: ["old"] } };
 	const second = { entries: { commands: ["new"] } };
 	const third = { entries: { commands: ["newest"] } };
@@ -39,8 +39,11 @@ test("prepending synced ranges ages gold through silver and bronze, then expires
 	expect(later("commands", "released")).toBe("stable");
 	expect(later("commands", "nightly")).toBe("nightly");
 	expect(later("commands", "unknown")).toBeUndefined();
-	const expired = createProvenanceLookup({ fork, upstream: [fourth, third, second, first] });
-	expect(expired("commands", "old")).toBeUndefined();
+	const oldest = createProvenanceLookup({ fork, upstream: [fourth, third, second, first] });
+	expect(oldest("commands", "future")).toBe("gold");
+	expect(oldest("commands", "newest")).toBe("silver");
+	expect(oldest("commands", "new")).toBe("bronze");
+	expect(oldest("commands", "old")).toBe("bronze");
 });
 
 test("upstream adoption supersedes historical fork origin and newest range wins overlaps", () => {
@@ -54,7 +57,7 @@ test("upstream adoption supersedes historical fork origin and newest range wins 
 test("Settings selection styling preserves each marker's independent tier color", () => {
 	const tiers: EntryProvenance[] = ["nightly", "stable", "gold", "silver", "bronze"];
 	const colors = {
-		nightly: "accent",
+		nightly: "provenancePurple",
 		stable: "success",
 		gold: "provenanceGold",
 		silver: "provenanceSilver",
