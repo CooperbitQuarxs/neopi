@@ -148,7 +148,8 @@ The initial ready frame uses protocol v1 and advertises the opt-in lossless tran
   "supportedProtocolVersions": [1, 2],
   "maxFrameBytes": 1048576,
   "maxReassembledFrameBytes": 67108864,
-  "capabilities": []
+  "capabilities": [],
+  "supportsBashExcludeFromContext": true
 }
 ```
 
@@ -334,8 +335,17 @@ The TypeScript client exposes `setCacheWarming(mode): Promise<CacheWarmingMode>`
 
 ### Bash
 
-- `{ id?, type: "bash", command: string }`
+- `{ id?, type: "bash", command: string, excludeFromContext?: boolean }`
 - `{ id?, type: "abort_bash" }`
+
+`excludeFromContext: true` keeps the run out of model context, like terminal
+`!!`: the output is still returned and recorded in the transcript, where
+extensions and `get_messages` see it. Non-boolean values are rejected.
+
+Older runtimes ignore unknown fields and would share the output, so send
+`excludeFromContext: true` only when the `ready` frame has
+`supportsBashExcludeFromContext: true`. `RpcClient.bash()` enforces this; with
+the Python, Go and Rust SDKs, check `client.ready` / `Ready()` / `ready()`.
 
 `bash` is dispatched concurrently: the RPC server continues reading commands
 while the shell command runs, so `abort_bash` (or any other command) sent
@@ -348,6 +358,7 @@ correlate it via `id`. Ordering across concurrent commands is not guaranteed
 
 - `{ id?, type: "get_session_stats" }`
 - `{ id?, type: "get_usage", provider?: string, refresh?: boolean, redact?: boolean }`
+- `{ id?, type: "get_session_lease", sessionIds: string[] }` → `data: { held: string[], unknown: string[] }`: which sessions a running NeoPi (this process included) owns, probed without taking their ownership leases. Ids in neither list are free; `unknown` ids could not be probed. `npi session lease --json -- <id>...` answers the same without an RPC child (`--` keeps ids starting with `-` from parsing as options).
 - `{ id?, type: "export_html", outputPath?: string }`
 - `{ id?, type: "switch_session", sessionPath: string }` — fails with `code: "session_in_use"` when another process holds the file (see [Session lease](#session-lease))
 - `{ id?, type: "branch", entryId: string }` — same `session_in_use` code if the branch file is held elsewhere. `entryId` must be a user request: a user message or a user-invoked `/skill:` prompt (a `custom_message` entry); `data.text` is the request as typed, `/skill:<name> <args>` for a skill prompt
@@ -2144,7 +2155,7 @@ Extensions in RPC mode use request/response UI frames. `--no-ui` disables the ex
 
 `--mode rpc-ui` independently enables the tool UI context, including with `--no-ui`:
 
-- `ask` still sends `select` requests. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
+- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
 - Other callers using the tool UI context retain its supported dialog methods (`select`, `confirm`, `input`, `editor`, and cancellation) and presentation methods (`notify`, `setStatus`, string-array `setWidget`, `set_editor_text`, and opt-in `setTitle`). `--no-ui` is not a transport-level filter on these methods.
 - Tool approval prompts use the extension runner, not the tool UI context. Under `--no-ui`, tools requiring approval fail closed with a no-interactive-UI error rather than sending an approval dialog, just as with `--mode rpc --no-ui`.
 - MCP authentication challenges do not gain an RPC UI handler in either mode; the interactive-mode MCP auth handler is not installed.
@@ -2166,7 +2177,8 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      host hint from `ExtensionUIDialogOptions.secret`; hosts that support
      masked input should hide typed characters when `secret: true`.
    - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
-     question of one `ask` tool call:
+     question of one extension `ui.askDialog` call or questions-based `ask`
+     tool invocation:
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.

@@ -335,6 +335,7 @@ For the bash tool specifically:
 - **Cargo parallelism**: always pass `-j 6` to cargo builds (e.g. `cargo build -j 6`,
   `bun run build:native` should use `CARGO_BUILD_JOBS=6`). The machine has 20 cores;
   unbounded cargo eats all of them and starves the session.
+- `bun check`'s Rust half runs only when the branch changed a Rust-affecting file (`*.rs`, `crates/`, Cargo/toolchain files) since its merge base with `upstream/main` or `origin/main`, committed or not; it always runs in GitHub Actions, when that cannot be determined (e.g. shallow clone), or with `OMP_FORCE_RUST_TASKS=1`.
 
 ## Rust Build Profiles
 

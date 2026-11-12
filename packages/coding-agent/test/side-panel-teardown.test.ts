@@ -72,7 +72,6 @@ describe("InteractiveMode quit while docked", () => {
 			undefined,
 			undefined,
 			undefined,
-			undefined,
 			composer,
 		);
 		try {

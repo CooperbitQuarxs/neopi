@@ -55,6 +55,13 @@ Resetting either threshold resets the pair, so the other half of an ad-hoc thres
 
 The default scope is `session`. It never writes config files, takes precedence over per-model thresholds, survives compaction, and clears at a logical session reset, switch, or tree navigation. Restarting does not retain it. `reset` restores settings-layer values; optional `keys` limits the reset. Scopes `project` and `user` persist to their own config files; resetting those scopes removes their keys instead. Persisted changes still obey existing environment, runtime, role and per-model precedence. The inspection result reports the current settings and actual trigger, so a shadowed write is visible.
 
+## Bash visualization
+
+Embedded-shell calls default to Python-like **Pseudo**; switch to **Raw** for the original command. Syntax appears incrementally as the shell compiles it. Active commands retain their colors while inactive code fades; only failures get `×`. Values appear beside each variable's latest observed setter.
+
+In Tern, the toggle and menu stay in the command segment; replay controls live in the inspector. In the inspector, `v` toggles Raw/Pseudo; `c/i/d/e/u` toggle color, inline variables, idioms, effects and embedded programs; `s` splits original/Pseudo. Space plays or pauses retained execution, arrows step, `r` resets, `l` returns live, and `−/+` changes speed. Escape closes.
+
+Replay retains up to 20,000 records, 2 MiB output and 8 MiB payload; evictions are indicated. Effect badges are heuristic, not safety guarantees. Remote-script interiors are marked untraced; PTY/user-shell calls keep their plain command view.
 ## Memory backends
 
 The agent supports three mutually-exclusive memory backends, selected via the `memory.backend` setting (Settings → Memory tab, or `~/.omp/config.yml`):

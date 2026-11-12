@@ -139,7 +139,7 @@ export function createDefinitionGenerator<T extends object>(options: DefinitionG
 				reasoning: toReasoningEffort(thinking),
 				disableReasoning: shouldDisableReasoning(thinking),
 				toolChoice: { type: "tool", name: "submit_definition" },
-				maxTokens: Math.min(16_384, model.maxTokens),
+				maxTokens: Math.min(16_384, model.maxTokens ?? 16_384),
 				cacheRetention: "long",
 			});
 			request.signal?.throwIfAborted();
