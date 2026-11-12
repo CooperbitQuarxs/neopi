@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { adjustHsv } from "@oh-my-pi/pi-utils/color";
+import { adjustHsv, colorLuma } from "@oh-my-pi/pi-utils/color";
 import { getCustomThemesDir } from "@oh-my-pi/pi-utils/dirs";
 import { isEnoent } from "@oh-my-pi/pi-utils/fs-error";
 import { detectColorMode, resolveThemeColors, resolveVarRefs } from "./color";
@@ -156,6 +156,13 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 	const { mode, symbolPresetOverride, symbolCyclers, colorBlindMode } = options;
 	const colorMode = mode ?? detectColorMode();
 	const resolvedColors = resolveThemeColors(themeJson.colors, themeJson.vars);
+	// Older built-in and custom themes inherit legible marker colors without
+	// making these new tokens mandatory in their saved definitions.
+	const surfaceLuma = colorLuma(resolvedColors.statusLineBg);
+	const markerDefaults = surfaceLuma !== undefined && surfaceLuma > 0.5 ? lightThemeJson : darkThemeJson;
+	for (const key of ["provenancePurple", "provenanceGold", "provenanceSilver", "provenanceBronze"] as const) {
+		resolvedColors[key] ??= markerDefaults.colors[key];
+	}
 
 	if (colorBlindMode) {
 		const added = resolvedColors.toolDiffAdded;

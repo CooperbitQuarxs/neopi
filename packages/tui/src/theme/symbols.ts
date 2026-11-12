@@ -21,8 +21,8 @@ export type SymbolKey =
 	| "status.aborted"
 	/** @deprecated Alias of `status.success`; kept so extensions and theme overrides that name it keep working. */
 	| "status.done"
-	| "provenance.fork"
-	| "provenance.newUpstream"
+	| "provenance.moon"
+	| "provenance.star"
 	// Navigation
 	| "nav.cursor"
 	| "nav.selected"
@@ -416,8 +416,8 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	"status.shadowed": "○",
 	"status.aborted": "⏹",
 	"status.done": "✔",
-	"provenance.fork": "☾",
-	"provenance.newUpstream": "✦",
+	"provenance.moon": "☾",
+	"provenance.star": "✦",
 	// Navigation
 	"nav.cursor": "❯",
 	"nav.selected": "➤",
@@ -742,8 +742,8 @@ const NERD_SYMBOLS: SymbolMap = {
 	"status.aborted": "\uf04d",
 	// alias of status.success
 	"status.done": "\uf00c",
-	"provenance.fork": "\uf186",
-	"provenance.newUpstream": "\uf005",
+	"provenance.moon": "\uf186",
+	"provenance.star": "\uf005",
 	// Navigation
 	// pick:  | alt:  
 	"nav.cursor": "\uf054",
@@ -1226,8 +1226,8 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.shadowed": "[/]",
 	"status.aborted": "[#]",
 	"status.done": "[+]",
-	"provenance.fork": "[fork]",
-	"provenance.newUpstream": "[new]",
+	"provenance.moon": "[nightly]",
+	"provenance.star": "*",
 	// Navigation
 	"nav.cursor": ">",
 	"nav.selected": "->",
