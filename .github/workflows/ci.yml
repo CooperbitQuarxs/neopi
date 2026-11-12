@@ -35,13 +35,13 @@ on:
    # always publish a stable release, including when selecting nightly.
    workflow_dispatch:
 
-# Supersede stale PR heads. Nightly pushes share one group without cancellation:
-# a running nightly build always finishes and publishes its prerelease, and only
-# the newest waiting push replaces older waiting ones.
+# Supersede stale PR heads and stale nightly builds: a newer nightly push cancels
+# the running nightly build, so only the newest nightly head builds and publishes
+# its prerelease.
 # Unique groups preserve every running and queued neopi push/manual release.
 concurrency:
    group: "${{ github.workflow }}-${{ (github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly')) && github.ref || github.run_id }}"
-   cancel-in-progress: "${{ github.event_name == 'pull_request' }}"
+   cancel-in-progress: "${{ github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/nightly') }}"
 
 env:
    FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
