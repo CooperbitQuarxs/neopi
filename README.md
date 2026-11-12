@@ -226,6 +226,15 @@ failing regression test.
 
 Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
 
+NeoPi never checks for or installs upstream omp binaries on startup, and does
+not show omp's automatic-update onboarding. Binary self-update is not available
+yet: `npi update --check` explains this without contacting a release service.
+Download platform-specific NeoPi assets from
+[our GitHub releases](https://github.com/PsychedelicShayna/neopi/releases),
+not omp's installers or global packages. `npi update --plugins` remains available
+for plugin updates. The exact, bare `npi update` command above continues to
+integrate reviewed upstream **source** into the fork and build NeoPi locally.
+
 ## Capture an idea
 
 `npi idea "describe the change"` starts an interactive issue funnel. It reads the tracker conventions, checks for duplicates, asks for missing boundaries and acceptance, and shows the proposed issue for approval before publishing to `PsychedelicShayna/neopi`. To shorten the command in a POSIX shell, optionally add `alias ni='npi idea'` to your shell configuration, then run `ni "describe the change"`.

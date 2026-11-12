@@ -35,66 +35,13 @@
 
 ## 安装
 
-**macOS · Linux**
+此仓库是 **NeoPi**，不是上游 omp。不要使用 `omp.sh` 安装脚本或上游的
+Homebrew、npm、Bun、Nix、mise 软件包来更新 NeoPi；这些来源发布的是 omp。
 
-```sh
-curl -fsSL https://omp.sh/install | sh
-```
-
-安装脚本会从 `build.stencil.so` 下载预编译二进制，并在安装前校验其 SHA-256；如需改用 bun 安装软件包，请传入 `--source`（PowerShell：`-Source`）。可通过 `curl -fsSL https://omp.sh/install | sh -s -- --binary --ref v<version>` 固定某个版本（PowerShell：`-Binary -Ref v<version>`）。
-
-> **Alpine / musl：** 预编译的 musl 二进制动态链接 `libstdc++`/`libgcc`，而原生 Alpine 并不自带。请先安装：`apk add libstdc++ libgcc`。
-
-**Homebrew**
-
-```sh
-brew install can1357/tap/omp
-```
-
-**Bun（推荐）**
-
-```sh
-bun install -g @oh-my-pi/pi-coding-agent
-```
-
-**Nix**
-
-```sh
-# Run without installing
-nix run github:can1357/oh-my-pi
-
-# Or install into the active profile (Nix < 2.30: `nix profile install`)
-nix profile add github:can1357/oh-my-pi
-```
-
-Flake 使用者可以使用 `packages.<system>.omp`、`overlays.default`、`nixosModules.default` 或 `homeManagerModules.default`。Home Manager 配置可以安装 OMP 并以声明式方式管理其设置：
-
-```nix
-{
-  inputs.omp.url = "github:can1357/oh-my-pi";
-
-  # In your Home Manager module:
-  imports = [ inputs.omp.homeManagerModules.default ];
-  programs.omp = {
-    enable = true;
-    settings.startup.quiet = true;
-  };
-}
-```
-
-**Windows（PowerShell）**
-
-```powershell
-irm https://omp.sh/install.ps1 | iex
-```
-
-**固定版本（mise）**
-
-```sh
-mise use -g github:can1357/oh-my-pi
-```
-
-macOS · Linux · Windows · bun ≥ 1.4.4
+从源码安装请参阅 [英文 README](README.md#install-from-source)。
+预编译 NeoPi 二进制请从
+[PsychedelicShayna/neopi Releases](https://github.com/PsychedelicShayna/neopi/releases)
+选择与你的平台匹配的资产。NeoPi 尚未提供二进制自更新功能。
 
 ### Shell 补全
 
