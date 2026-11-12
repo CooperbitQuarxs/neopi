@@ -160,6 +160,7 @@ export async function approvePlanProposal(
 	session.setPlanReferencePath(proposal.planFilePath);
 	session.setPlanProposalHandler(null);
 	session.setPlanModeState(undefined);
+	session.sessionManager.appendModeChange("none", { approvedPlanFilePath: proposal.planFilePath });
 	try {
 		await autosaveApprovedPlan({
 			settings: session.settings,

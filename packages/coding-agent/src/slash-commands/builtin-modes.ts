@@ -229,7 +229,9 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 				await runtime.ctx.settings.clearScope(scope);
 				runtime.ctx.showStatus(`Cleared ${scope} settings overrides.`);
 			} else {
-				runtime.ctx.showSettingsSelector(scope || undefined);
+				runtime.ctx.showSettingsSelector(
+					scope === "session" || scope === "project" || scope === "global" ? scope : undefined,
+				);
 			}
 			clearSubmittedText(runtime);
 		},
@@ -518,7 +520,7 @@ export const BUILTIN_MODE_SLASH_COMMANDS: ReadonlyArray<SlashCommandSpec> = [
 		acpInputHint: "[on|ultra|off|status]",
 		subcommands: [
 			{ name: "on", description: "Enable fast mode (priority tier)" },
-			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex models that offer it)" },
+			{ name: "ultra", description: "Enable Ultrafast (OpenAI API, or Codex and relay models that offer it)" },
 			{ name: "off", description: "Disable fast mode" },
 			{ name: "status", description: "Show fast mode status" },
 		],

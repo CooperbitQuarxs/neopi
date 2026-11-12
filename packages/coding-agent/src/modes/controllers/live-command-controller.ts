@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText, toError } from "@oh-my-pi/pi-utils";
 import { AgentRegistry } from "../../registry/agent-registry";
 import {
 	type LivePhase,
@@ -58,14 +58,13 @@ const LIVE_MESSAGE_USAGE: AssistantMessage["usage"] = {
 	totalTokens: 0,
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
-function errorFrom(cause: unknown): Error {
-	return cause instanceof Error ? cause : new Error(String(cause));
-}
 
 /** Runs extension observers without turning their failures into session failures. */
 function notifyRemote(callback: () => void): void {
-	try { callback(); } catch (cause) {
-		logger.warn("Live session observer threw", { error: errorFrom(cause).message });
+	try {
+		callback();
+	} catch (cause) {
+		logger.warn("Live session observer threw", { error: toError(cause).message });
 	}
 }
 
@@ -276,7 +275,7 @@ export class LiveCommandController {
 		try {
 			await session.stop();
 		} catch (cause) {
-			this.#finish(session, errorFrom(cause));
+			this.#finish(session, toError(cause));
 		} finally {
 			this.#finish(session);
 		}
@@ -288,7 +287,7 @@ export class LiveCommandController {
 		if (session) {
 			this.#finish(session);
 			void session.stop().catch(cause => {
-				logger.debug("Live session teardown failed", { error: errorFrom(cause).message });
+				logger.debug("Live session teardown failed", { error: toError(cause).message });
 			});
 		} else {
 			this.#release();
@@ -477,7 +476,7 @@ export class LiveCommandController {
 			if (this.#session === session) ingest.attach();
 			else return { error: new Error("Live session stopped during startup") };
 		} catch (cause) {
-			const error = errorFrom(cause);
+			const error = toError(cause);
 			if (this.#session === session) {
 				await session.stop();
 				this.#finish(session, error);
@@ -619,7 +618,7 @@ export class LiveCommandController {
 			this.#ctx.showError(error.message);
 		}
 		const settling = stopping.catch(cause => {
-			logger.debug("Live session cleanup failed", { error: errorFrom(cause).message });
+			logger.debug("Live session cleanup failed", { error: toError(cause).message });
 		});
 		this.#settling = settling;
 		void settling.finally(() => {

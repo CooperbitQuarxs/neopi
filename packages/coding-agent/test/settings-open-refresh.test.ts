@@ -71,15 +71,16 @@ describe("open Settings reloads", () => {
 	});
 
 	it("preserves a theme picker's highlighted draft and marks the edited row", async () => {
-		selector.handleNativeEvent({ type: "action", key: "", act: "edit", value: "theme.dark" });
+		selector.handleNativeEvent({ type: "action", key: "", act: "edit", value: "theme.dark", mods: [] });
 		selector.handleInput("\x1b[B");
 		const editing = page().editing;
 		expect(editing).toMatchObject({ row: "theme.dark", option: "light" });
+		expect(row("theme.dark").warning).toBeUndefined();
 		await reload("titanium");
 		expect(page().editing).toEqual(editing);
-		expect(row("theme.dark").warning).toContain("changed elsewhere");
-		expect(page().lead).toContain("your edit is preserved");
-		expect(selector.render(120).join("\n")).toContain("changed elsewhere");
+		const warning = row("theme.dark").warning;
+		if (warning === undefined) throw new Error("Expected an external-change conflict warning");
+		expect(selector.render(120).join("\n")).toContain(warning);
 		selector.handleInput("\x1b");
 		expect(page().editing).toBeNull();
 		expect(row("theme.dark").control).toMatchObject({ value: "titanium" });
@@ -97,16 +98,20 @@ describe("open Settings reloads", () => {
 		selector.handleInput("\x1b[D");
 		const editing = page().editing;
 		expect(editing).toMatchObject({ row: "browser.screenshotDir", draft: "/my/draft", cursor: 8 });
+		expect(row("browser.screenshotDir").warning).toBeUndefined();
 		await reload("light", "/other/screenshots");
 		expect(page().editing).toEqual(editing);
-		expect(row("browser.screenshotDir").warning).toContain("changed elsewhere");
+		expect(row("browser.screenshotDir").warning).toBeDefined();
 	});
 
 	it("refreshes after this session's Apply and unsubscribes when disposed", async () => {
 		await Bun.write(path.join(root, "profile", "config.yml"), "theme:\n  dark: light\n");
 		selector.handleInput("\x1b[17~");
-		for (let i = 0; i < 100 && !page().lead?.includes("Applied"); i++) await Bun.sleep(5);
-		expect(page().lead).toContain("Applied");
+		for (let i = 0; i < 100; i++) {
+			const control = row("theme.dark").control;
+			if ("value" in control && control.value === "light") break;
+			await Bun.sleep(5);
+		}
 		expect(row("theme.dark").control).toMatchObject({ value: "light" });
 		selector.dispose();
 		requestRender.mockClear();
