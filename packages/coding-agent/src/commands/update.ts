@@ -10,7 +10,11 @@ import * as pluginCli from "../cli/plugin-cli";
 export default class Update extends Command {
 	static description = commandHelp.description;
 	static flags = {
-		check: Flags.boolean({ char: "c", description: "Only check plugin updates when used with --plugins", default: false }),
+		check: Flags.boolean({
+			char: "c",
+			description: "Only check plugin updates when used with --plugins",
+			default: false,
+		}),
 		plugins: Flags.boolean({ char: "l", description: "Update installed plugins", default: false }),
 	};
 
