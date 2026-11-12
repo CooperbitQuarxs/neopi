@@ -2155,7 +2155,7 @@ Extensions in RPC mode use request/response UI frames. `--no-ui` disables the ex
 
 `--mode rpc-ui` independently enables the tool UI context, including with `--no-ui`:
 
-- `ask` still sends `select` requests. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
+- `ask` sends `select` requests by default; hosts can negotiate the all-questions `ask` frame with `set_ask_dialog` below. Free-text answers use `editor` with `promptStyle: true`; `ask` does not send `input` requests. Dialog cancellation can send `cancel`.
 - Other callers using the tool UI context retain its supported dialog methods (`select`, `confirm`, `input`, `editor`, and cancellation) and presentation methods (`notify`, `setStatus`, string-array `setWidget`, `set_editor_text`, and opt-in `setTitle`). `--no-ui` is not a transport-level filter on these methods.
 - Tool approval prompts use the extension runner, not the tool UI context. Under `--no-ui`, tools requiring approval fail closed with a no-interactive-UI error rather than sending an approval dialog, just as with `--mode rpc --no-ui`.
 - MCP authentication challenges do not gain an RPC UI handler in either mode; the interactive-mode MCP auth handler is not installed.
@@ -2177,8 +2177,8 @@ Use `--mode rpc --no-ui` for a host without a tool UI surface; use `--mode rpc-u
      host hint from `ExtensionUIDialogOptions.secret`; hosts that support
      masked input should hide typed characters when `secret: true`.
    - `ask` is emitted only after `set_ask_dialog` enables it. It carries every
-     question of one extension `ui.askDialog` call (the `ask` tool instead walks
-     its HTML form field by field through `select`, `input` and `editor`):
+     question of one extension `ui.askDialog` call or questions-based `ask`
+     tool invocation:
      `questions: Array<{ id: string, question: string, header?: string, options: Array<{ label: string, description?: string, preview?: string }>, multi?: boolean, recommended?: number }>`
      plus `timeout?: number`. `options` never include an "Other" entry; hosts
      always offer free text.

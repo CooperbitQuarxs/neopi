@@ -64,7 +64,7 @@ export default function (pi) {
 			const stream = createAssistantMessageEventStream();
 			const last = context.messages.findLast(entry => entry.role === "user" || entry.role === "toolResult");
 			const text = last?.role === "user" ? last.content.map(part => part.text ?? "").join("") : "";
-			const argsAt = text.indexOf('{"html"');
+			const argsAt = text.indexOf('{"questions"');
 			const message = {
 				role: "assistant",
 				api: model.api,
@@ -131,6 +131,7 @@ await runRpcMode(session, {
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -210,6 +211,7 @@ await runRpcMode(session);
 			cwd: temp.path(),
 			env: {
 				PATH: Bun.env.PATH,
+				BUN_BE_BUN: "1",
 				HOME: temp.join("home"),
 				PI_CODING_AGENT_DIR: temp.join("agent"),
 				XDG_CONFIG_HOME: temp.join("config"),
@@ -450,6 +452,7 @@ export default function(pi) {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -483,7 +486,7 @@ export default function(pi) {
 		};
 
 		try {
-			await send({ type: "login", providerId: "rpc-secret", id: "secret" });
+			await send({ type: "login", providerId: "rpc-secret", id: "secret", allowSecretInput: true });
 			for await (const frame of readJsonl<unknown>(stdout)) {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "extension_ui_request" && frame.method === "input") {
@@ -710,7 +713,7 @@ describe("RPC ask dialog", () => {
 		expect(onTimeout).not.toHaveBeenCalled();
 	});
 
-	it("walks the ask tool's form through select prompts, also after the host opts into ask dialogs", async () => {
+	it("answers questions through fallback select and the negotiated ask frame", async () => {
 		await using temp = await TempDir.create("@rpc-ask-dialog-");
 		const extensionPath = temp.join("scripted-ask.ts");
 		await Bun.write(extensionPath, scriptedAskProvider);
@@ -728,6 +731,7 @@ describe("RPC ask dialog", () => {
 				cwd: temp.path(),
 				env: {
 					PATH: Bun.env.PATH,
+					BUN_BE_BUN: "1",
 					HOME: temp.join("home"),
 					PI_CODING_AGENT_DIR: temp.join("agent"),
 					XDG_CONFIG_HOME: temp.join("config"),
@@ -754,9 +758,7 @@ describe("RPC ask dialog", () => {
 		const toolResults: unknown[] = [];
 		let optInResponse: unknown;
 		let finished = false;
-		const form = JSON.stringify({
-			html: '<form><p>Which database?</p><label><input type="radio" name="db" value="pg"> Postgres</label><label><input type="radio" name="db" value="sqlite" checked> SQLite</label></form>',
-		});
+		const args = JSON.stringify({ questions: [dbQuestion] });
 
 		try {
 			// The provider exists only once the extension loads, so select it over RPC.
@@ -765,20 +767,24 @@ describe("RPC ask dialog", () => {
 				if (!isRecord(frame)) continue;
 				if (frame.type === "response" && frame.id === "model") {
 					if (frame.success !== true) throw new Error(`Scripted model unavailable: ${JSON.stringify(frame)}`);
-					await send({ type: "prompt", id: "fallback", message: form });
+					await send({ type: "prompt", id: "fallback", message: args });
 				} else if (frame.type === "extension_ui_request" && frame.method === "select") {
 					selectRequests.push(frame);
 					await send({ type: "extension_ui_response", id: frame.id, value: "Postgres" });
 				} else if (frame.type === "extension_ui_request" && frame.method === "ask") {
 					askRequests.push(frame);
-					await send({ type: "extension_ui_response", id: frame.id, cancelled: true });
+					await send({
+						type: "extension_ui_response",
+						id: frame.id,
+						answers: [{ id: "db", selectedOptions: ["Postgres"] }],
+					});
 				} else if (frame.type === "tool_execution_end" && frame.toolName === "ask") {
 					toolResults.push(frame.result);
 				} else if (frame.type === "prompt_result" && frame.id === "fallback") {
 					await send({ type: "set_ask_dialog", id: "opt-in", enabled: true });
 				} else if (frame.type === "response" && frame.id === "opt-in") {
 					optInResponse = frame;
-					await send({ type: "prompt", id: "dialog", message: form });
+					await send({ type: "prompt", id: "dialog", message: args });
 				} else if (frame.type === "prompt_result" && frame.id === "dialog") {
 					finished = true;
 					break;
@@ -792,7 +798,7 @@ describe("RPC ask dialog", () => {
 
 		if (!finished) throw new Error(`RPC ask fixture did not finish: ${await stderr}`);
 		await stderr;
-		expect(selectRequests).toHaveLength(2);
+		expect(selectRequests).toHaveLength(1);
 		expect(selectRequests[0]).toMatchObject({ method: "select", title: "Which database?" });
 		expect(optInResponse).toEqual({
 			id: "opt-in",
@@ -801,9 +807,9 @@ describe("RPC ask dialog", () => {
 			success: true,
 			data: { enabled: true },
 		});
-		expect(askRequests).toEqual([]);
+		expect(askRequests).toMatchObject([{ method: "ask", questions: [dbQuestion] }]);
 		const answered = expect.objectContaining({
-			details: { answers: [{ name: "db", question: "Which database?", answer: "Postgres" }] },
+			details: expect.objectContaining({ selectedOptions: ["Postgres"] }),
 		});
 		expect(toolResults).toEqual([answered, answered]);
 	}, 60_000);
