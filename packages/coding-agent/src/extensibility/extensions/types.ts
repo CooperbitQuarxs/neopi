@@ -8,6 +8,7 @@
  * - Interact with the user via UI primitives
  */
 
+import type { EntryProvenance } from "@oh-my-pi/pi-tui/theme/provenance";
 import {
 	type ExtensionUiComponent,
 	type ExtensionUiComponentFactory,
@@ -1849,6 +1850,8 @@ export type {
 export interface RegisteredCommand {
 	name: string;
 	description?: string;
+	/** Display-only origin marker; bundled commands use the shared provenance registry. */
+	provenance?: EntryProvenance;
 	getArgumentCompletions?: (argumentPrefix: string) => AutocompleteItem[] | null;
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
@@ -2063,6 +2066,7 @@ export interface ExtensionAPI {
 		name: string,
 		options: {
 			description?: string;
+			provenance?: RegisteredCommand["provenance"];
 			getArgumentCompletions?: RegisteredCommand["getArgumentCompletions"];
 			handler: RegisteredCommand["handler"];
 		},

@@ -275,6 +275,7 @@ class ConcreteExtensionAPI implements ExtensionAPI {
 		name: string,
 		options: {
 			description?: string;
+			provenance?: RegisteredCommand["provenance"];
 			getArgumentCompletions?: RegisteredCommand["getArgumentCompletions"];
 			handler: RegisteredCommand["handler"];
 		},
