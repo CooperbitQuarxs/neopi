@@ -8,7 +8,7 @@ import { Settings, resetSettingsForTest } from "../src/config/settings";
 import { createAgentFieldGenerator, type AgentFieldGenerator } from "../src/task/agent-generation";
 import { BUILTIN_TOOLS, type Tool, type ToolSession } from "../src/tools";
 import { toolSummary } from "../src/tools/xdev";
-import { agentDefinitionFieldSchema as fieldSchema } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import { agentDefinitionFieldSchema as fieldSchema, type AgentAdvisor } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 
 const model = buildModel({
 	id: "generator", name: "Generator", provider: "test", api: "ollama-chat", baseUrl: "https://example.test",
@@ -102,7 +102,7 @@ describe("agent field generation harness context", () => {
 		for (const advisor of [
 			{ ref: "velvet", scope: "project-omp" },
 			{ inline: { name: "private", model: "@advisor", instructions: "Review every change", reviewMode: "agent-end", reviewInterval: 2, tools: ["read"], delivery: { concern: "on-yield", blocker: "next-tool-call" } } },
-		]) {
+		] satisfies AgentAdvisor[]) {
 			completion.mockResolvedValue(response({ advisor }));
 			expect((await generator.generateAgentFields({ definition: {}, target: "advisor" })).fields.advisor).toEqual(advisor);
 		}

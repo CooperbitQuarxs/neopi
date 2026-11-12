@@ -15,21 +15,23 @@ import {
 } from "../session/settings";
 import { cfgAutolearnEnabled } from "../autolearn/settings";
 import { cfgMemoryBackend } from "../memory-backend/settings";
-import { cfgTuiVimMode } from "../modes/settings";
+import { cfgComposerPredictions, cfgTuiVimMode } from "../modes/settings";
 import { cfgAdvisorEnabled } from "../advisor/settings";
 import { cfgEffortPolicyMode } from "./effort-policy";
+import { cfgTaskPerCallModelAllow } from "../task/settings";
 
-/** Condition over the global settings; hidden (false) until they are initialized. */
-function whenSettings(test: (settings: Settings) => boolean): () => boolean {
-	return () => isSettingsInitialized() && test(Settings.instance);
+/** A condition follows its panel's settings owner; an uninitialized default proxy stays hidden. */
+function whenSettings(test: (settings: Settings) => boolean): (scope: Settings) => boolean {
+	return scope => (scope !== settings || isSettingsInitialized()) && test(scope);
 }
 
-const CONDITIONS: Record<string, () => boolean> = {
+const CONDITIONS: Record<string, (scope: Settings) => boolean> = {
 	macOS: () => process.platform === "darwin",
 	hasImageProtocol: () => !!TERMINAL.imageProtocol,
 	nativeRendering: () => isNativeRendering(),
 	advisorEnabled: whenSettings(s => cfgAdvisorEnabled.get(s) === true),
 	vimModeEnabled: whenSettings(s => cfgTuiVimMode.get(s) === true),
+	composerPredictionsEnabled: whenSettings(s => cfgComposerPredictions.get(s) === true),
 	hindsightActive: whenSettings(s => cfgMemoryBackend.get(s) === "hindsight"),
 	mnemopiActive: whenSettings(s => cfgMemoryBackend.get(s) === "mnemopi"),
 	autolearnActive: whenSettings(s => cfgAutolearnEnabled.get(s) === true),
@@ -38,6 +40,8 @@ const CONDITIONS: Record<string, () => boolean> = {
 	usageAwareFallbackEnabled: whenSettings(s => cfgRetryUsageAwareFallback.get(s) === true),
 	planModeEnabled: whenSettings(s => cfgPlanEnabled.get(s)),
 	planAutosaveEnabled: whenSettings(s => cfgPlanEnabled.get(s) && cfgPlanAutosave.get(s)),
+	perCallModelAllowNotProject: whenSettings(s => cfgTaskPerCallModelAllow.provenance(s) !== "project"),
+
 };
 
 /** Description suffix telling the panel user that an environment variable is in play. */
@@ -61,6 +65,7 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 			const ui = setting.ui;
 			if (ui?.tab !== tab) continue;
 			const note = envNote(setting);
+			const condition = ui.condition ? CONDITIONS[ui.condition] : undefined;
 			entries.push({
 				path: setting.id,
 				type: setting.type,
@@ -68,7 +73,7 @@ export function createSettingsHost(scope: Settings = settings, initialScope: Set
 				ui: { ...ui, provenance: entryProvenance("settings", setting.id), description: `${ui.description}${note}` },
 				enumValues: setting.enumValues,
 				credential: setting.isCredential,
-				condition: ui.condition ? CONDITIONS[ui.condition] : undefined,
+				condition: condition ? () => condition(scope) : undefined,
 			});
 		}
 	}

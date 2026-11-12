@@ -3,7 +3,7 @@ import * as os from "node:os";
 import { join } from "node:path";
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage } from "@oh-my-pi/pi-ai";
-import { logger, prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt, toError } from "@oh-my-pi/pi-utils";
 import { renderPromptAsset } from "@oh-my-pi/pi-utils/prompt-assets";
 import { buildLivePromptContext } from "../prompts/contexts";
 import type { AgentSession } from "../session/agent-session";
@@ -189,10 +189,6 @@ export interface LiveSessionControllerOptions {
 	): LiveRecorderLike;
 	/** Caller-owned WebRTC audio; no host microphone or speaker is opened. */
 	sdpOffer?: string;
-}
-
-function errorFrom(cause: unknown): Error {
-	return cause instanceof Error ? cause : new Error(String(cause));
 }
 
 function joinDelegationContent(
@@ -569,7 +565,7 @@ export class LiveSessionController {
 			this.#recorder = recorder;
 			this.#refreshAudioPhase();
 		} catch (cause) {
-			const error = errorFrom(cause);
+			const error = toError(cause);
 			this.#reportFailure(error);
 			await this.stop();
 			throw error;
@@ -588,7 +584,7 @@ export class LiveSessionController {
 		this.#refreshAudioPhase();
 		const transport = this.#transport;
 		if (transport) {
-			void transport.setMuted(this.#muted).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void transport.setMuted(this.#muted).catch(cause => this.#reportFailure(toError(cause)));
 		}
 	}
 
@@ -655,7 +651,7 @@ export class LiveSessionController {
 			try {
 				recorder.stop();
 			} catch (cause) {
-				cleanupError = errorFrom(cause);
+				cleanupError = toError(cause);
 			}
 		}
 		this.#recordAudioDropSummary();
@@ -668,12 +664,12 @@ export class LiveSessionController {
 			try {
 				await transport.send(buildSessionClose());
 			} catch (cause) {
-				cleanupError ??= errorFrom(cause);
+				cleanupError ??= toError(cause);
 			}
 			try {
 				await transport.close();
 			} catch (cause) {
-				cleanupError ??= errorFrom(cause);
+				cleanupError ??= toError(cause);
 			}
 		}
 
@@ -686,7 +682,7 @@ export class LiveSessionController {
 		try {
 			handler();
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -734,7 +730,7 @@ export class LiveSessionController {
 			case "delegation.created":
 				// This response hands the operator's words off rather than answering them.
 				this.#answeredTurns = undefined;
-				void this.#handleDelegation(event).catch(cause => this.#reportFailure(errorFrom(cause)));
+				void this.#handleDelegation(event).catch(cause => this.#reportFailure(toError(cause)));
 				break;
 			case "error":
 				this.#reportFailure(new Error(event.message));
@@ -1348,7 +1344,7 @@ export class LiveSessionController {
 					item: { type: "delegation", target: "client", id: `forced-${crypto.randomUUID()}`, content: [] },
 				},
 				forced,
-			).catch(cause => this.#reportFailure(errorFrom(cause)));
+			).catch(cause => this.#reportFailure(toError(cause)));
 			return;
 		}
 		this.#releasedReplyTurns = [turn.turn];
@@ -1560,7 +1556,7 @@ export class LiveSessionController {
 		for (const turn of this.#turnsWhere(turn => turn.blocked === true)) this.#deliverBlockedTurn(turn);
 		const pending = this.#pendingDelegation;
 		if (pending) {
-			void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(toError(cause)));
 		}
 		const delegation = this.#deferredVoiceDelegation;
 		this.#deferredVoiceDelegation = undefined;
@@ -1570,7 +1566,7 @@ export class LiveSessionController {
 				this.#rejectDirectDelegation(delegation.event.item.id, turn.text);
 			}
 		} else if (delegation && this.#turnsWhere(turn => !turn.blocked && turn.claim === undefined).length > 0) {
-			void this.#handleDelegation(delegation.event).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#handleDelegation(delegation.event).catch(cause => this.#reportFailure(toError(cause)));
 		} else if (this.#suppressedResponse) {
 			const turns = this.#turnsWhere(turn => turn.final && !turn.blocked && turn.claim === undefined);
 			this.#suppressedResponse = false;
@@ -1729,7 +1725,7 @@ export class LiveSessionController {
 			if (this.#transport.pushAudio(samples)) this.#framesSent += 1;
 			else this.#framesDroppedAtNativeQueue += 1;
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -1846,7 +1842,7 @@ export class LiveSessionController {
 				pending.turns = pending.turns.filter(turn => turn !== current.turn);
 				if (pending.turns.length > 0) {
 					void this.#dispatchPendingDelegation(pending.generation).catch(cause =>
-						this.#reportFailure(errorFrom(cause)),
+						this.#reportFailure(toError(cause)),
 					);
 				} else {
 					this.#pendingDelivery?.cancel();
@@ -1896,7 +1892,7 @@ export class LiveSessionController {
 
 		const pendingGeneration = this.#pendingDelegation?.generation;
 		if (final && pendingGeneration !== undefined) {
-			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(errorFrom(cause)));
+			void this.#dispatchPendingDelegation(pendingGeneration).catch(cause => this.#reportFailure(toError(cause)));
 		}
 		if (
 			final &&
@@ -1963,7 +1959,7 @@ export class LiveSessionController {
 					if (turns.length) this.#acceptSpeech(blocked.text, false, turns, "turns");
 				}
 			})
-			.catch(cause => this.#reportFailure(errorFrom(cause)));
+			.catch(cause => this.#reportFailure(toError(cause)));
 	}
 
 	/** Drop a partial turn the recognizer withdrew, clearing its composer preview. A pending handoff
@@ -1982,7 +1978,7 @@ export class LiveSessionController {
 			this.#refreshAudioPhase();
 			return;
 		}
-		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(errorFrom(cause)));
+		void this.#dispatchPendingDelegation(pending.generation).catch(cause => this.#reportFailure(toError(cause)));
 	}
 
 	#recordAudioDropSummary(): void {
@@ -2092,7 +2088,7 @@ export class LiveSessionController {
 		});
 		this.#sendChain = sent.then(
 			() => {},
-			cause => this.#reportFailure(errorFrom(cause)),
+			cause => this.#reportFailure(toError(cause)),
 		);
 		return sent.catch(() => false);
 	}
@@ -2116,7 +2112,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onPhase(phase);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2138,7 +2134,7 @@ export class LiveSessionController {
 			this.#emittedInputLevel = input;
 			this.#emittedOutputLevel = output;
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2147,7 +2143,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onTranscript(transcript);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
@@ -2155,7 +2151,7 @@ export class LiveSessionController {
 		try {
 			this.#callbacks.onUserSpeech?.(speech);
 		} catch (cause) {
-			this.#reportFailure(errorFrom(cause));
+			this.#reportFailure(toError(cause));
 		}
 	}
 
