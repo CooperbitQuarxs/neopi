@@ -31,18 +31,19 @@ classification source. `packages/tui/src/theme/ui-entry-provenance.json` carries
 the existing hotkey, role and status-segment annotations. Both use one lookup and
 the same tier vocabulary in `packages/tui/src/theme/provenance.ts`.
 
-- **Moon:** a NeoPi-only addition absent from the latest published stable release.
-- **Purple star:** a NeoPi-only addition present in that release's source commit.
-- **Gold, silver, bronze stars:** additions in the newest, previous and third
-  synced upstream ranges. Older upstream entries are unmarked.
+- **Purple crescent:** a nightly-only NeoPi addition.
+- **Same crescent, original green:** a NeoPi addition in the latest published stable release.
+- **Gold, silver, bronze stars:** additions in the newest, previous and all older
+  synced upstream ranges respectively. Upstream cohorts never expire.
 
 Pin `stableRelease.tag` and its peeled commit to GitHub's latest published
 non-prerelease, not the potentially newer `neopi` branch head. Update the stable
 and nightly fork lists from that released inventory. For an upstream sync,
 prepend one `upstream` range with its version, exclusive previous commit,
 inclusive release commit and newly introduced IDs; existing ranges age
-automatically without moving every item between color lists. Retain only three
-visible tiers. A fork feature adopted upstream takes the upstream tier.
+automatically without moving every item between color lists. Keep every cohort:
+index 0 is gold, index 1 silver, and index 2 or greater bronze. A fork feature
+adopted upstream takes the upstream tier.
 
 Audit the actual built-in command registry (including aliases and bundled
 extension commands) and `orderedSettings()`/`createSettingsHost()` inventories.
@@ -53,8 +54,10 @@ extensions provide their own provenance from the shared registry at registration
 Display marks never change command identifiers, completion values or type icons.
 
 Marker colors are optional theme tokens: `provenancePurple`, `provenanceGold`,
-`provenanceSilver`, and `provenanceBronze`. Older/custom themes inherit light or
-dark defaults and may override each token. Terminal rows and native spans paint
+`provenanceSilver`, and `provenanceBronze`. NeoPi crescents use `provenancePurple`
+for nightly and the original star's `success` green for published stable.
+Older/custom themes inherit light or dark defaults and may override each token.
+Terminal rows and native spans paint
 markers independently of the surrounding label; plain Markdown/native-label
 transport uses the matching glyph without embedding terminal ANSI sequences.
 
