@@ -4,7 +4,6 @@ import type { ThemeJson } from "./schema";
 
 const themeColorsSchema = type({
 	accent: "string | number",
-	"provenancePurple?": "string | number",
 	"provenanceGold?": "string | number",
 	"provenanceSilver?": "string | number",
 	"provenanceBronze?": "string | number",

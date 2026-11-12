@@ -7,7 +7,7 @@ export type EntryProvenance = "nightly" | "stable" | "gold" | "silver" | "bronze
 
 const PROVENANCE_COLORS = {
 	nightly: "accent",
-	stable: "provenancePurple",
+	stable: "success",
 	gold: "provenanceGold",
 	silver: "provenanceSilver",
 	bronze: "provenanceBronze",
@@ -48,7 +48,7 @@ export function createProvenanceLookup<Kind extends string>(data: ProvenanceEntr
 /** Display-only suffix; keep the registry identifier and completion value untouched. */
 export function provenanceSuffix(provenance: EntryProvenance | undefined): string {
 	if (!provenance) return "";
-	return ` ${theme.fg(PROVENANCE_COLORS[provenance], theme.symbol(provenance === "nightly" ? "provenance.moon" : "provenance.star"))}`;
+	return ` ${theme.fg(PROVENANCE_COLORS[provenance], theme.symbol(provenance === "nightly" || provenance === "stable" ? "provenance.moon" : "provenance.star"))}`;
 }
 
 export type UiRegistryKind = keyof typeof uiData.fork.nightly;
@@ -58,5 +58,7 @@ export const uiProvenance = createProvenanceLookup(uiData);
 export function uiProvenanceSuffix(kind: UiRegistryKind, id: string, colored = false): string {
 	const provenance = uiProvenance(kind, id);
 	if (colored) return provenanceSuffix(provenance);
-	return provenance ? ` ${activeThemeSymbol(provenance === "nightly" ? "provenance.moon" : "provenance.star")}` : "";
+	return provenance
+		? ` ${activeThemeSymbol(provenance === "nightly" || provenance === "stable" ? "provenance.moon" : "provenance.star")}`
+		: "";
 }

@@ -160,7 +160,7 @@ export function createTheme(themeJson: ThemeJson, options: CreateThemeOptions = 
 	// making these new tokens mandatory in their saved definitions.
 	const surfaceLuma = colorLuma(resolvedColors.statusLineBg);
 	const markerDefaults = surfaceLuma !== undefined && surfaceLuma > 0.5 ? lightThemeJson : darkThemeJson;
-	for (const key of ["provenancePurple", "provenanceGold", "provenanceSilver", "provenanceBronze"] as const) {
+	for (const key of ["provenanceGold", "provenanceSilver", "provenanceBronze"] as const) {
 		resolvedColors[key] ??= markerDefaults.colors[key];
 	}
 

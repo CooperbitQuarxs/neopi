@@ -107,10 +107,6 @@
 					"$ref": "#/$defs/colorValue",
 					"description": "Primary accent color (logo, selected items, cursor)"
 				},
-				"provenancePurple": {
-					"$ref": "#/$defs/colorValue",
-					"description": "NeoPi additions present in the latest published stable release"
-				},
 				"provenanceGold": {
 					"$ref": "#/$defs/colorValue",
 					"description": "Newest synced upstream feature tier"

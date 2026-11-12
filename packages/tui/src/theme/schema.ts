@@ -38,7 +38,6 @@ export type AnsiColor = keyof typeof ANSI_COLOR_INDEX;
  */
 export const OPTIONAL_THEME_COLOR_RECORD = {
 	assistantMessageText: true,
-	provenancePurple: true,
 	provenanceGold: true,
 	provenanceSilver: true,
 	provenanceBronze: true,
@@ -86,7 +85,6 @@ export interface ThemeJson {
 
 export type ThemeColor =
 	| "accent"
-	| "provenancePurple"
 	| "provenanceGold"
 	| "provenanceSilver"
 	| "provenanceBronze"
@@ -154,7 +152,6 @@ export type ThemeColor =
 /** Set of all valid ThemeColor string values for runtime validation */
 const THEME_COLOR_RECORD = {
 	accent: true,
-	provenancePurple: true,
 	provenanceGold: true,
 	provenanceSilver: true,
 	provenanceBronze: true,

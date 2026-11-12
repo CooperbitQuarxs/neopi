@@ -1,11 +1,6 @@
 import { beforeAll, expect, test } from "bun:test";
 import { CombinedAutocompleteProvider } from "../src/autocomplete";
-import {
-	createProvenanceLookup,
-	provenanceColor,
-	provenanceSuffix,
-	type EntryProvenance,
-} from "../src/theme/provenance";
+import { createProvenanceLookup, provenanceSuffix, type EntryProvenance } from "../src/theme/provenance";
 import { initTheme, theme } from "../src/theme/theme";
 import { SettingsSelectorComponent } from "../src/overlays/settings-selector";
 
@@ -58,6 +53,13 @@ test("upstream adoption supersedes historical fork origin and newest range wins 
 
 test("Settings selection styling preserves each marker's independent tier color", () => {
 	const tiers: EntryProvenance[] = ["nightly", "stable", "gold", "silver", "bronze"];
+	const colors = {
+		nightly: "accent",
+		stable: "success",
+		gold: "provenanceGold",
+		silver: "provenanceSilver",
+		bronze: "provenanceBronze",
+	} as const;
 	const selector = new SettingsSelectorComponent(
 		{
 			availableThinkingLevels: [],
@@ -83,7 +85,7 @@ test("Settings selection styling preserves each marker's independent tier color"
 	const rows = selector.render(160);
 	for (const tier of tiers) {
 		const row = rows.find(line => Bun.stripANSI(line).includes(tier))!;
-		const glyph = theme.symbol(tier === "nightly" ? "provenance.moon" : "provenance.star");
-		expect(row).toContain(theme.fg(provenanceColor(tier)!, glyph));
+		const glyph = theme.symbol(tier === "nightly" || tier === "stable" ? "provenance.moon" : "provenance.star");
+		expect(row).toContain(theme.fg(colors[tier], glyph));
 	}
 });

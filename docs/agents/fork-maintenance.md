@@ -31,8 +31,8 @@ classification source. `packages/tui/src/theme/ui-entry-provenance.json` carries
 the existing hotkey, role and status-segment annotations. Both use one lookup and
 the same tier vocabulary in `packages/tui/src/theme/provenance.ts`.
 
-- **Moon:** a NeoPi-only addition absent from the latest published stable release.
-- **Purple star:** a NeoPi-only addition present in that release's source commit.
+- **Crescent, current color:** a nightly-only NeoPi addition.
+- **Same crescent, original green:** a NeoPi addition in the latest published stable release.
 - **Gold, silver, bronze stars:** additions in the newest, previous and third
   synced upstream ranges. Older upstream entries are unmarked.
 
@@ -52,9 +52,11 @@ Do not assign fork origin to arbitrary third-party commands by name. Bundled
 extensions provide their own provenance from the shared registry at registration.
 Display marks never change command identifiers, completion values or type icons.
 
-Marker colors are optional theme tokens: `provenancePurple`, `provenanceGold`,
-`provenanceSilver`, and `provenanceBronze`. Older/custom themes inherit light or
-dark defaults and may override each token. Terminal rows and native spans paint
+Upstream star colors are optional theme tokens: `provenanceGold`,
+`provenanceSilver`, and `provenanceBronze`. NeoPi crescents use `accent` for
+nightly and the original star's `success` green for published stable. Older/custom
+themes inherit light or dark defaults and may override each upstream token.
+Terminal rows and native spans paint
 markers independently of the surrounding label; plain Markdown/native-label
 transport uses the matching glyph without embedding terminal ANSI sequences.
 
