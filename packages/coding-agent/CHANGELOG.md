@@ -153,6 +153,7 @@
 ### Fixed
 
 - Built-in prompt inspection and overrides recognize async-result command headers and eval-agent model advertisements added by the upstream sync ([#703](https://github.com/PsychedelicShayna/neopi/pull/703), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
+- Source-mode CLI workers start without discovery initialization cycles, while plugin manifest upgrades still invalidate classification and resolution caches ([#703](https://github.com/PsychedelicShayna/neopi/pull/703), implemented by GPT-6.1 Sol on behalf of PsychedelicShayna).
 - `/defer cancel` no longer waits behind the extension input hook it needs to cancel. Enter and Ctrl+Enter cancel without letting later ordinary submissions overtake that hook.
 - Ask dialogs hide the draft cursor when arrow navigation hands input to the question, without clearing the draft.
 - A speed tier the provider newly advertises for the active model (for example UltraFast) becomes available without re-selecting the model; `/fast ultra` no longer reports it unavailable until restart.

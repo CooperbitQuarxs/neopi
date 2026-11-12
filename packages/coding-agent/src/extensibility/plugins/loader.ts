@@ -16,7 +16,8 @@ import {
 	normalizePathForComparison,
 } from "@oh-my-pi/pi-utils";
 import { getConfigDirPaths } from "../../config";
-import { registerPluginCacheInvalidator, resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { resolveActiveProjectRegistryPath } from "../../discovery/helpers";
+import { registerPluginCacheInvalidator } from "../../discovery/plugin-cache-invalidators";
 import { findExtensionDirectoryIndex, resolveExtensionDirectory } from "../extensions/directory-resolution";
 import { installLegacyPiSpecifierShim } from "./legacy-pi-compat";
 import { normalizePluginRuntimeConfig } from "./runtime-config";
