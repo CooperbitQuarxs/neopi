@@ -16,7 +16,7 @@ import {
 	logger,
 	stripWindowsExtendedLengthPathPrefix,
 } from "@oh-my-pi/pi-utils";
-import { registerPluginCacheInvalidator } from "../../discovery/helpers";
+import { registerPluginCacheInvalidator } from "../../discovery/plugin-cache-invalidators";
 
 const USE_BUNDLED_PI_MODULES = isCompiledBinary() || Boolean(process.env.PI_BUNDLED);
 
