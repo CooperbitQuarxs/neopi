@@ -220,7 +220,7 @@ export const ttsrHelp = {
 } satisfies CommandMetadata;
 
 export const updateHelp = {
-	description: "Update the NeoPi source fork or installed plugins; binary self-update is unavailable",
+	description: "Show NeoPi update status, sync stable/nightly, roll back, integrate source, or update plugins",
 } satisfies CommandMetadata;
 
 export const usageHelp = {

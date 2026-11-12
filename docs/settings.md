@@ -1158,13 +1158,52 @@ The `cache` segment (in the `full` and `nerd` presets) shows before you send whe
 | `startup.showSplash` | boolean | `false` | Show the full setup animation on ordinary interactive startup without rerunning setup. |
 | `startup.changelogMode` | enum | `summary` | `summary`, `expanded`, `hidden`: choose startup release-note presentation. |
 | `startup.setupWizard` | boolean | `true` | Show newly added onboarding steps once per setup version. |
+| `update.channel` | enum | build channel | `stable` follows the latest non-prerelease NeoPi GitHub release; `nightly` follows the latest prerelease. Stable release builds default to stable, nightly/source builds to nightly. Existing `canary` values migrate to `nightly`. |
+| `update.auto` | enum | `notify` | `off`, `notify`, `auto`: check after ordinary interactive startup, at most once per 24 hours per executable unless the channel changes. Auto applies a verified release for the next launch; existing sessions stay running. Legacy booleans migrate `true` → `auto`, `false` → `off`. |
 | `btw.inject` | boolean | `false` | `/btw` answers wrap a requested steering prompt in `<inject>…</inject>`, shown highlighted; assign `app.btw.inject` a key to send it to the main session (a steer while it runs, else a new turn). NeoPi keeps `Alt+I` for the IRC viewer. |
 
-NeoPi does not check for or install upstream omp releases. The inherited
-`startup.checkUpdate`, `update.channel`, and `update.auto` settings are no longer
-registered or shown, even when old configuration files retain their values.
-Exact `npi update` keeps the source-fork integration workflow; binary
-self-update is unavailable. `npi update --plugins` still updates plugins.
+NeoPi checks only **PsychedelicShayna/neopi** GitHub releases; upstream omp
+downloads and its onboarding remain removed. `startup.checkUpdate` is still
+retired. Binary update preferences are read from the profile's global config:
+project/session overrides cannot silently replace the shared executable.
+
+`npi update` reports status offline; `--check` queries the selected channel
+without installing. `npi update stable|nightly` synchronizes now and persists
+that channel, even for a downgrade. `npi update rollback [N]` moves a cumulative
+cursor N published releases back within the installed release's channel, not
+the preference's channel. It sets a destination-wide hold that prevents every
+profile's automatic updater from undoing the rollback. Explicit stable/nightly
+sync or a genuine channel preference change clears the hold; another profile's
+pre-existing different preference does not.
+
+Automatic checks never downgrade an untracked newer local build just because
+the published channel is stale. Same-version nightlies use exact release
+identity and, for untracked builds, immutable Git ancestry rather than semver
+alone. Releases before the first updater version **18.18.8** require an
+interactive capability-loss acknowledgement and are never installed
+automatically. Each replacement verifies the exact platform SHA256 and
+preserves the previous binary. POSIX publication is atomic. Windows uses
+**recoverable replacement**, not atomic publication: stage and verify
+`npi.exe.new`, rename the running image to `npi.exe.old`, then publish the new
+image. A failed second rename immediately restores `.old`; a journal lets the
+next launch/update report and reconcile an interrupted swap.
+
+For a process crash or power loss between the Windows renames, the independent
+`npi.exe.recover.ps1` helper lives outside the replaced executable path and
+can restore a verified old image or finish a verified new image without
+starting NeoPi. Run
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\npi.exe.recover.ps1`.
+If the target is absent, manual emergency recovery is
+`Rename-Item -LiteralPath .\npi.exe.old -NewName npi.exe`.
+Keep the journal and recovery images if recovery reports an error.
+Real Windows loader/filesystem behavior remains **unverified** until the
+prerelease Windows check; injected-failure/termination checks do not replace it.
+
+Recovery dispatch does not load the ordinary CLI/TUI/native/settings-migration
+graph. If the raw global YAML cannot be read, explicit binary recovery leaves
+it untouched and warns that the channel was not persisted. `npi update source`
+retains the prompted source-fork integration workflow; `npi update --plugins`
+still updates plugins independently.
 
 ### Providers and services
 

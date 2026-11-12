@@ -224,16 +224,49 @@ failing regression test.
 
 ## Updating
 
-Run `npi update` for the fork-aware interactive update path. Maintainers integrating upstream releases must use the origin-based worktree and PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md); the remote default branch is the source of truth.
+`npi update` shows the installed release, selected channel and any rollback hold.
+`npi update --check` checks **PsychedelicShayna/neopi** GitHub releases without
+replacing the binary. NeoPi never downloads upstream omp binaries or runs their
+installers.
 
-NeoPi never checks for or installs upstream omp binaries on startup, and does
-not show omp's automatic-update onboarding. Binary self-update is not available
-yet: `npi update --check` explains this without contacting a release service.
-Download platform-specific NeoPi assets from
-[our GitHub releases](https://github.com/PsychedelicShayna/neopi/releases),
-not omp's installers or global packages. `npi update --plugins` remains available
-for plugin updates. The exact, bare `npi update` command above continues to
-integrate reviewed upstream **source** into the fork and build NeoPi locally.
+- `npi update stable` / `npi update nightly` synchronizes immediately to the
+  latest published release / prerelease, persists that channel and releases a
+  rollback hold. An explicit sync may downgrade the installed build.
+- `npi update rollback [N]` steps back N releases (default 1) in the installed
+  build's channel. The cursor is cumulative: `rollback 2` twice steps back four
+  releases. Rollback pauses automatic replacement for this executable across
+  all profiles until an explicit sync or channel change.
+- Settings → Startup & Updates exposes the existing `update.channel` and
+  `update.auto` keys. Automatic updates default to **Notify**; **Auto** installs
+  on a later interactive launch, at most once per 24 hours unless the channel changes.
+  Running sessions keep their loaded version. Project/session overrides cannot
+  silently replace a machine-wide executable.
+- Every install selects the exact platform asset, verifies its release's
+  `SHA256SUMS.txt`, smoke-checks the staged executable and retains `npi.previous`.
+- POSIX replacement is atomic. Windows uses **recoverable replacement**:
+  checksum-verified `npi.exe.new`, running image renamed to `npi.exe.old`, then
+  the new image published, with immediate restoration if publication fails.
+  A separate `npi.exe.recover.ps1` reads the journal and can recover even when
+  `npi.exe` is missing. Run it with
+  `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\npi.exe.recover.ps1`.
+  If necessary, with `npi.exe` absent, manually rename `npi.exe.old` back to
+  `npi.exe`. The next launch/update reports and reconciles interrupted swaps.
+  Real Windows loader/filesystem verification remains **unverified** pending
+  the prerelease Windows check; injected-failure checks are not that proof.
+- Releases older than **18.18.8** remove this recovery command: explicit install
+  requires an interactive `INSTALL LEGACY` acknowledgement; automatic updates
+  never install them. Retain `npi.previous` or reinstall manually to recover.
+- Recovery commands dispatch before the ordinary CLI, native startup, settings
+  migrations, extensions and TUI. If the raw settings YAML is unreadable, binary
+  recovery can still proceed without overwriting that file; it reports that
+  the channel could not be persisted.
+
+The preserved fork-aware source workflow is now **`npi update source`**.
+Maintainers integrating upstream source must use the origin-based worktree and
+PR procedure in [docs/agents/upstream-sync.md](docs/agents/upstream-sync.md);
+the remote default branch is the source of truth. `npi update --plugins`
+continues to update plugins independently. Manual platform downloads remain at
+[our GitHub releases](https://github.com/PsychedelicShayna/neopi/releases).
 
 ## Capture an idea
 
