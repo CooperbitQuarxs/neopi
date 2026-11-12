@@ -23,6 +23,7 @@ async function fixture(tags = Array.from({ length: 7 }, (_, i) => `v18.18.8-nigh
 	await chmod(executablePath, 0o755);
 	const requests: string[] = [];
 	const bodies = new Map<string, string>();
+	const ancestry = new Map<string, string | number>();
 	const releases = tags.map((tag_name, index) => {
 		const version = /^v(\d+\.\d+\.\d+)/.exec(tag_name)![1];
 		const body = `#!/bin/sh\necho npi/${version}\n# ${tag_name}\n`;
@@ -49,14 +50,19 @@ async function fixture(tags = Array.from({ length: 7 }, (_, i) => `v18.18.8-nigh
 	const fetcher = (async (input: string | URL | Request) => {
 		const url = String(input);
 		requests.push(url);
-		if (url.includes("/compare/")) return Response.json({ status: "ahead" });
+		if (url.includes("/compare/")) {
+			const comparison = ancestry.get(decodeURIComponent(url.slice(url.indexOf("...") + 3))) ?? "ahead";
+			return typeof comparison === "number"
+				? new Response("Comparison unavailable", { status: comparison })
+				: Response.json({ status: comparison });
+		}
 		if (url.includes("api.github.com")) return Response.json(releases);
 		const body = bodies.get(url);
 		return body === undefined ? new Response("missing", { status: 404 }) : new Response(body);
 	}) as typeof fetch;
 	const options: UpdateOptions = { executablePath, agentDir, fetcher, print: () => {} };
 	const state = async () => JSON.parse(await readFile(`${executablePath}.update.json`, "utf8"));
-	return { root, agentDir, executablePath, initial, requests, bodies, releases, options, state };
+	return { root, agentDir, executablePath, initial, requests, bodies, ancestry, releases, options, state };
 }
 
 test("rollback 2 twice advances four releases from a publication-ordered cursor and holds every profile", async () => {
@@ -147,8 +153,7 @@ test("declining a legacy rollback preserves binary and cursor before downloading
 			},
 		}),
 	).rejects.toThrow("cancelled");
-	expect(warnings[0]).toContain("will no longer be available");
-	expect(warnings[0]).toContain(".previous");
+	expect(warnings).toHaveLength(1);
 	expect(await readFile(f.executablePath, "utf8")).toBe(f.initial);
 	expect(f.requests.every(url => url.includes("api.github.com"))).toBe(true);
 });
@@ -254,4 +259,46 @@ test("interrupted recovery never assigns a stale release cursor to a manually re
 	expect(messages.join("\n")).toContain("local/source build");
 	await runNeoPiUpdate(["rollback", "2"], f.options);
 	expect((await f.state()).installed.tag).toBe("v18.18.8-nightly.fixture6");
+});
+
+test.each(["behind", "diverged", "unknown", 503])(
+	"same-version releases without verified updater ancestry (%s) require acknowledgement and never auto-install",
+	async comparison => {
+		const tag = "v18.18.8+legacy.fixture";
+		const f = await fixture([tag]);
+		f.ancestry.set(tag, comparison);
+		let acknowledgements = 0;
+		await expect(
+			runNeoPiUpdate(["stable"], {
+				...f.options,
+				confirmLegacy: async () => {
+					acknowledgements++;
+					return false;
+				},
+			}),
+		).rejects.toThrow("cancelled");
+		expect(acknowledgements).toBe(1);
+		await persistUpdateChannel("stable", f.agentDir);
+		await checkForAutomaticUpdate(
+			{ channel: "stable", mode: "auto", agentDir: f.agentDir, onMessage: () => {} },
+			f.options,
+		);
+		expect(await readFile(f.executablePath, "utf8")).toBe(f.initial);
+		expect((await f.state()).installed).toBeUndefined();
+		expect(f.requests.every(url => url.includes("api.github.com"))).toBe(true);
+	},
+);
+
+test("the first implementation's identical source ancestry is updater-capable", async () => {
+	const tag = "v18.18.8-nightly.first-updater";
+	const f = await fixture([tag]);
+	f.ancestry.set(tag, "identical");
+	await runNeoPiUpdate(["nightly"], {
+		...f.options,
+		confirmLegacy: async () => {
+			throw new Error("Updater-capable source must not request legacy acknowledgement");
+		},
+	});
+	expect((await f.state()).installed.tag).toBe(tag);
+	expect(await readFile(f.executablePath, "utf8")).toContain(tag);
 });

@@ -13,8 +13,11 @@ import { installRelease, recoverPendingUpdate, type ReleaseAsset, withUpdateLock
 
 export type UpdateChannel = "stable" | "nightly";
 export type UpdateMode = "off" | "notify" | "auto";
-/** First NeoPi release version with this recovery command, not the old omp updater. */
+/** First upstream version carrying this fork's recovery command. */
 export const FIRST_UPDATER_VERSION = "18.18.8";
+// Earlier fork builds share the same upstream version; their source ancestry
+// must also include the first signed implementation, not merely match semver.
+const FIRST_UPDATER_SOURCE_COMMIT = "d2774cb85c99459da0cf4d33a5fc9ccc40e9ea88";
 const RELEASES_URL = "https://api.github.com/repos/PsychedelicShayna/neopi/releases";
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -70,8 +73,22 @@ function releaseVersion(tag: string): string {
 	if (!version) throw new Error(`Unrecognized NeoPi release version: ${tag}`);
 	return version;
 }
-function predatesUpdater(release: Release): boolean {
-	return Bun.semver.order(releaseVersion(release.tag_name), FIRST_UPDATER_VERSION) < 0;
+async function predatesUpdater(release: Release, fetcher: typeof fetch): Promise<boolean> {
+	const order = Bun.semver.order(releaseVersion(release.tag_name), FIRST_UPDATER_VERSION);
+	if (order !== 0) return order < 0;
+	try {
+		const response = await fetcher(
+			`https://api.github.com/repos/PsychedelicShayna/neopi/compare/${FIRST_UPDATER_SOURCE_COMMIT}...${encodeURIComponent(release.tag_name)}`,
+			{ headers: { Accept: "application/vnd.github+json" }, signal: AbortSignal.timeout(30_000) },
+		);
+		if (!response.ok) return true;
+		const comparison = (await response.json()) as { status?: string };
+		return comparison.status !== "ahead" && comparison.status !== "identical";
+	} catch {
+		// An unavailable ancestry proof must never authorize an automatic
+		// capability-losing replacement. Explicit installs can acknowledge it.
+		return true;
+	}
 }
 
 function isCompiledDestination(executable: string): boolean {
@@ -230,11 +247,6 @@ async function applyRelease(
 	preference: UpdateChannel,
 	switchChannel?: UpdateChannel,
 ): Promise<void> {
-	if (predatesUpdater(target)) {
-		const warning = `WARNING: ${target.tag_name} predates NeoPi's updater (${FIRST_UPDATER_VERSION}). After installing it, npi update stable/nightly/rollback will no longer be available. Recovery requires the retained ${executable}.previous binary or manual NeoPi installation.`;
-		if (!(await (options.confirmLegacy ?? confirmLegacy)(warning)))
-			throw new Error("Legacy release installation cancelled; nothing was replaced.");
-	}
 	const before = await stat(executable);
 	const beforeInstalled = await currentRelease(executable, state);
 	const beforeHash = beforeInstalled?.sha256 ?? (await executableHash(executable));
@@ -363,7 +375,7 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 		);
 		if (!latest) throw new Error(`No published NeoPi ${preferences.channel} releases found.`);
 		print(
-			`Latest ${preferences.channel}: ${latest.tag_name}${predatesUpdater(latest) ? " (predates this updater; interactive acknowledgement required to install)" : ""}\nNo binary was replaced.${state.hold ? " Rollback hold is ON." : ""}`,
+			`Latest ${preferences.channel}: ${latest.tag_name}${(await predatesUpdater(latest, options.fetcher ?? fetch)) ? " (predates or cannot verify this updater; interactive acknowledgement required to install)" : ""}\nNo binary was replaced.${state.hold ? " Rollback hold is ON." : ""}`,
 		);
 		return;
 	}
@@ -405,6 +417,11 @@ export async function runNeoPiUpdate(argv: string[], options: UpdateOptions = {}
 				`Already installed ${target.tag_name}; ${preferences.warning ? "unreadable config preserved" : `channel set to ${channel}`}; rollback hold released.`,
 			);
 			return;
+		}
+		if (await predatesUpdater(target, options.fetcher ?? fetch)) {
+			const warning = `WARNING: ${target.tag_name} predates or cannot be verified to include NeoPi's recovery updater (${FIRST_UPDATER_VERSION}, first source ${FIRST_UPDATER_SOURCE_COMMIT}). After installing it, npi update stable/nightly/rollback may no longer be available. Recovery requires the retained ${executable}.previous binary or manual NeoPi installation.`;
+			if (!(await (options.confirmLegacy ?? confirmLegacy)(warning)))
+				throw new Error("Legacy release installation cancelled; nothing was replaced.");
 		}
 		const switchChannel = command === "rollback" || preferences.warning ? undefined : channel;
 		await applyRelease(
@@ -464,9 +481,9 @@ export async function checkForAutomaticUpdate(
 		const changingChannel = options.channel !== (current?.channel ?? defaultUpdateChannel());
 		if (!changingChannel && current && Date.parse(target.published_at) <= Date.parse(current.publishedAt)) return;
 		if (!changingChannel && !current && !(await newerThanLocal(target, adapters))) return;
-		if (predatesUpdater(target)) {
+		if (await predatesUpdater(target, adapters.fetcher ?? fetch)) {
 			options.onMessage(
-				`${target.tag_name} predates the recovery updater and was not installed automatically. Use npi update ${options.channel} for an interactive sync.`,
+				`${target.tag_name} predates or cannot be verified to include the recovery updater and was not installed automatically. Use npi update ${options.channel} for an interactive sync.`,
 			);
 			return;
 		}

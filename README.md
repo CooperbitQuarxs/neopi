@@ -253,9 +253,12 @@ installers.
   `npi.exe`. The next launch/update reports and reconciles interrupted swaps.
   Real Windows loader/filesystem verification remains **unverified** pending
   the prerelease Windows check; injected-failure checks are not that proof.
-- Releases older than **18.18.8** remove this recovery command: explicit install
-  requires an interactive `INSTALL LEGACY` acknowledgement; automatic updates
-  never install them. Retain `npi.previous` or reinstall manually to recover.
+- The recovery updater starts at **18.18.8**, first source commit
+  `d2774cb85c99459da0cf4d33a5fc9ccc40e9ea88`. Older releases, and same-version
+  builds that cannot be verified to include that commit, require an interactive
+  `INSTALL LEGACY` acknowledgement; automatic updates never install them.
+  Their recovery commands may be absent. Retain `npi.previous` or reinstall
+  manually to recover.
 - Recovery commands dispatch before the ordinary CLI, native startup, settings
   migrations, extensions and TUI. If the raw settings YAML is unreadable, binary
   recovery can still proceed without overwriting that file; it reports that

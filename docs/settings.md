@@ -1179,9 +1179,12 @@ pre-existing different preference does not.
 Automatic checks never downgrade an untracked newer local build just because
 the published channel is stale. Same-version nightlies use exact release
 identity and, for untracked builds, immutable Git ancestry rather than semver
-alone. Releases before the first updater version **18.18.8** require an
+alone. The first updater is **18.18.8**, source commit
+`d2774cb85c99459da0cf4d33a5fc9ccc40e9ea88`. Older releases require an
 interactive capability-loss acknowledgement and are never installed
-automatically. Each replacement verifies the exact platform SHA256 and
+automatically. Same-version builds must also be verified to include that
+immutable source commit; missing, divergent or unavailable ancestry
+proof is treated conservatively as legacy. Each replacement verifies the exact platform SHA256 and
 preserves the previous binary. POSIX publication is atomic. Windows uses
 **recoverable replacement**, not atomic publication: stage and verify
 `npi.exe.new`, rename the running image to `npi.exe.old`, then publish the new
