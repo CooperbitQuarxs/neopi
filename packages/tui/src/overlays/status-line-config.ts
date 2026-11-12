@@ -915,7 +915,7 @@ export class StatusLineConfigOverlayComponent implements Component {
 				const { id, enabled } = line.row;
 				const templated = this.#templates[id] !== undefined ? " ✎" : "";
 				return style(
-					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id)} · ${sanitizeStatusText(id)}${templated}`,
+					`[${enabled ? "x" : " "}] ${segmentLabel(id)}${uiProvenanceSuffix("statusSegments", parseUsageBarSegmentId(id) ? "usage" : id, true)} · ${sanitizeStatusText(id)}${templated}`,
 					!enabled,
 				);
 			}

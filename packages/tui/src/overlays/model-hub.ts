@@ -1,4 +1,4 @@
-import { uiProvenanceSuffix } from "../theme/provenance";
+import { provenanceColor, uiProvenance, uiProvenanceSuffix } from "../theme/provenance";
 import { parseModelString, splitUpstreamRouting } from "./model-selector";
 /**
  * Fullscreen /models hub, shown on the alternate screen like /settings.
@@ -1844,7 +1844,9 @@ export class ModelHubComponent implements Component {
 		const roleValue =
 			scope === "session"
 				? this.#settings.getSessionModelRole?.(role)
-				: scope === "project" ? this.#settings.getProjectModelRole(role) : this.#settings.getGlobalModelRole(role);
+				: scope === "project"
+					? this.#settings.getProjectModelRole(role)
+					: this.#settings.getGlobalModelRole(role);
 		const allModels =
 			this.#scopedModels.length > 0
 				? scopedRolePool(
@@ -1855,11 +1857,12 @@ export class ModelHubComponent implements Component {
 		const roleLookup: ModelRoleLookup = {
 			getModelRole: scopedRole =>
 				scope === "session"
-					? (this.#settings.getSessionModelRole?.(scopedRole) ?? this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					:
-				scope === "project"
-					? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
-					: this.#settings.getGlobalModelRole(scopedRole),
+					? (this.#settings.getSessionModelRole?.(scopedRole) ??
+						this.#settings.getProjectModelRole(scopedRole) ??
+						this.#settings.getGlobalModelRole(scopedRole))
+					: scope === "project"
+						? (this.#settings.getProjectModelRole(scopedRole) ?? this.#settings.getGlobalModelRole(scopedRole))
+						: this.#settings.getGlobalModelRole(scopedRole),
 		};
 		return this.#settings.resolveRoleValue(roleValue, allModels, roleLookup);
 	}
@@ -1976,7 +1979,9 @@ export class ModelHubComponent implements Component {
 		const scopedStorage = this.#settings.modelRoleStorage === "project";
 		const scopes: readonly ModelRoleSelectionScope[] = this.#settings.editingScope
 			? [this.#settings.editingScope]
-			: scopedStorage ? ["global", "project"] : ["global"];
+			: scopedStorage
+				? ["global", "project"]
+				: ["global"];
 		for (const role of this.#visibleRoleIds()) {
 			const info = this.#settings.getRoleInfo(role);
 			if (!info.accepts(item.model)) continue;
@@ -2039,12 +2044,11 @@ export class ModelHubComponent implements Component {
 		committedLevel?: ConfiguredThinkingLevel,
 	): void {
 		const scoped = scope ?? "global";
-		const saved =
-			this.#settings.editingScope
-				? this.#settings.getRoleEffortSelection(role)
-				: scoped === "project"
-					? this.#settings.getProjectRoleEffortSelection(role)
-					: this.#settings.getGlobalRoleEffortSelection(role);
+		const saved = this.#settings.editingScope
+			? this.#settings.getRoleEffortSelection(role)
+			: scoped === "project"
+				? this.#settings.getProjectRoleEffortSelection(role)
+				: this.#settings.getGlobalRoleEffortSelection(role);
 		const selection =
 			saved?.mode === "auto" && saved.selector && saved.selector !== item.selector ? undefined : saved;
 		const options = this.#thinkingOptionsFor(item.model, role);
@@ -3206,7 +3210,9 @@ export class ModelHubComponent implements Component {
 			if (this.#focus === "list" || panel.editing) {
 				if (
 					!panel.editing &&
-					(matchesKey(rawData, "tab") || matchesKey(rawData, "left") || (getMenuSearchVimMode() && rawData === "h"))
+					(matchesKey(rawData, "tab") ||
+						matchesKey(rawData, "left") ||
+						(getMenuSearchVimMode() && rawData === "h"))
 				) {
 					this.#focus = "scope";
 				} else panel.handleInput(rawData);
@@ -3264,7 +3270,9 @@ export class ModelHubComponent implements Component {
 		const actionKey =
 			(rolesView && printable !== undefined && Object.hasOwn(ROLES_ACTION_KEYS, printable)) ||
 			(effortView && (printable === "x" || printable === "[" || printable === "]")) ||
-			(entry.kind === "provider" && printable === "e" && this.#pinnedProviders.some(provider => provider.id === entry.providerId));
+			(entry.kind === "provider" &&
+				printable === "e" &&
+				this.#pinnedProviders.some(provider => provider.id === entry.providerId));
 		if (
 			!action &&
 			!getMenuSearchVimMode() &&
@@ -4220,7 +4228,7 @@ export class ModelHubComponent implements Component {
 			const role = rowDef.role;
 			const info = this.#settings.getRoleInfo(role);
 			const assignment = this.#roles[role];
-			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+			const roleTag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role, true);
 			const tag = roleTag + " ".repeat(Math.max(0, tagWidth - visibleWidth(roleTag)));
 
 			let dot: string;
@@ -4232,12 +4240,11 @@ export class ModelHubComponent implements Component {
 				tagStyled = theme.fg(info.color ?? "muted", tag);
 				value = `${theme.fg("dim", `${assignment.model.provider}/`)}${selected ? theme.fg("accent", assignment.model.id) : assignment.model.id}`;
 				const source = this.#settings.getModelRoleSource(role);
-				const policy =
-					this.#settings.editingScope
-						? this.#settings.getRoleEffortSelection(role)
-						: source === "project"
-							? this.#settings.getProjectRoleEffortSelection(role)
-							: this.#settings.getGlobalRoleEffortSelection(role);
+				const policy = this.#settings.editingScope
+					? this.#settings.getRoleEffortSelection(role)
+					: source === "project"
+						? this.#settings.getProjectRoleEffortSelection(role)
+						: this.#settings.getGlobalRoleEffortSelection(role);
 				const effective =
 					policy?.mode === "auto"
 						? AUTO_THINKING
@@ -4273,7 +4280,9 @@ export class ModelHubComponent implements Component {
 			if (scopeNote) line += theme.fg("dim", `  [${scopeNote}]`);
 			const budget = this.#settings.getRoleTokenBudget?.(role);
 			const budgetStyled = budget === undefined ? "" : theme.fg("dim", `budget ${budget.toLocaleString("en-US")}`);
-			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled].filter(part => part.length > 0).join("  ");
+			const right = [budgetStyled, levelStyled, compactionStyled, cycleStyled]
+				.filter(part => part.length > 0)
+				.join("  ");
 			const rightWidth = visibleWidth(right);
 			const lineWidth = visibleWidth(line);
 			if (rightWidth > 0 && lineWidth + rightWidth + 2 <= width) {
@@ -4398,7 +4407,8 @@ export class ModelHubComponent implements Component {
 			if (strip.kind === "name") {
 				if (!strip.input.focused) return `/ edit · ${enter} set · ${cancel} parent`;
 				if (strip.purpose === "description") return `${enter} save description · ${cancel} leave field`;
-				if (strip.purpose === "roleBudget") return `${enter} save token budget · empty inherits · ${cancel} leave field`;
+				if (strip.purpose === "roleBudget")
+					return `${enter} save token budget · empty inherits · ${cancel} leave field`;
 				if (strip.purpose === "compaction") {
 					return `${enter} ${compactionConfirmPending(strip) ? "accept" : "set"} compaction point · ${cancel} leave field`;
 				}
@@ -4452,7 +4462,7 @@ export class ModelHubComponent implements Component {
 				return `${upDown} providers · ${enterRight} roles · ${altLeftRight} tabs${presets} · ${cancel} close`;
 			}
 			const row = this.#rolesRows[this.#roleIndex];
-			const copyKeys = getMenuSearchVimMode() ? ["y", "shift+y"] as const : ["alt+y", "alt+shift+y"] as const;
+			const copyKeys = getMenuSearchVimMode() ? (["y", "shift+y"] as const) : (["alt+y", "alt+shift+y"] as const);
 			const pasteKey = getMenuSearchVimMode() ? "p" : "alt+p";
 			const compaction =
 				this.#callbacks.onCompactionPointChange && this.#roleRowModel()
@@ -4531,14 +4541,14 @@ export class ModelHubComponent implements Component {
 				strip.purpose === "roleBudget"
 					? `${strip.role} token budget:`
 					: strip.purpose === "compaction"
-					? `${strip.model.id} limit:`
-					: strip.purpose === "contextRule"
-						? `${strip.selector} limit:`
-						: strip.purpose === "description"
-							? `${strip.role} description:`
-							: strip.purpose === "preset"
-								? "Preset name:"
-								: "New role name:";
+						? `${strip.model.id} limit:`
+						: strip.purpose === "contextRule"
+							? `${strip.selector} limit:`
+							: strip.purpose === "description"
+								? `${strip.role} description:`
+								: strip.purpose === "preset"
+									? "Preset name:"
+									: "New role name:";
 			const label = theme.fg("accent", labelText);
 			// A compaction point is at most a few characters (`1500k`, `12.5%`); a
 			// narrow field leaves the row for its notice.
@@ -4995,7 +5005,7 @@ export class ModelHubComponent implements Component {
 		const role = rowDef.role;
 		const info = this.#settings.getRoleInfo(role);
 		const assignment = this.#roles[role];
-		const tag = (info.tag ?? info.name ?? role) + uiProvenanceSuffix("roles", role);
+		const tag = info.tag ?? info.name ?? role;
 		let label: TspSpan[];
 		let detail: TspSpan[];
 		const value: TspSpan[] = [];
@@ -5015,6 +5025,9 @@ export class ModelHubComponent implements Component {
 			detail = assignment
 				? [span(`auto → ${assignment.model.provider}/${assignment.model.id}`, "dim")]
 				: [span("—", "dim")];
+		}
+		if (uiProvenance("roles", role)) {
+			label.push(span(uiProvenanceSuffix("roles", role), provenanceColor(uiProvenance("roles", role))));
 		}
 		const limit = assignment && this.#settings.compactionPointFor?.(assignment.model)?.limit;
 		if (limit) {
@@ -5131,7 +5144,11 @@ export class ModelHubComponent implements Component {
 					: this.#browser.query,
 		)?.error;
 		const props: TspPickerProps = {
-			title: this.#sessionOnly ? "Session model" : this.#settings.editingScope ? `Models · ${this.#settings.editingScope}` : "Models",
+			title: this.#sessionOnly
+				? "Session model"
+				: this.#settings.editingScope
+					? `Models · ${this.#settings.editingScope}`
+					: "Models",
 			subtitle: [
 				...(queryError ? [span(queryError, "error")] : []),
 				...(typeof subtitle === "string" ? [span(subtitle)] : (subtitle ?? [])),
@@ -5271,7 +5288,8 @@ export class ModelHubComponent implements Component {
 	#pickerSubtitle(entry: SidebarEntry, rolesView: boolean): TspPickerProps["subtitle"] {
 		if (this.#assignmentPending) return "Applying model…";
 		if (this.#sessionOnly) return "Current session only";
-		if (rolesView && this.#settings.editingScope) return `Editing ${this.#settings.editingScope} · session > project > global`;
+		if (rolesView && this.#settings.editingScope)
+			return `Editing ${this.#settings.editingScope} · session > project > global`;
 		const assigning = this.#assigning;
 		if (assigning !== null) {
 			if (assigning.kind === "fallbackKey") return "New fallback chain — pick the model it protects";
@@ -5620,11 +5638,11 @@ export class ModelHubComponent implements Component {
 								? `${strip.selector} limit `
 								: strip.purpose === "roleBudget"
 									? `${strip.role} token budget `
-								: strip.purpose === "description"
-									? `${strip.role} description `
-									: strip.purpose === "preset"
-										? "Preset name "
-										: "New role name "
+									: strip.purpose === "description"
+										? `${strip.role} description `
+										: strip.purpose === "preset"
+											? "Preset name "
+											: "New role name "
 							: strip.target === "rule"
 								? `Model ${this.#contextRulesView() ? "context" : "effort"} pattern `
 								: strip.target === "role"
@@ -5761,7 +5779,12 @@ export class ModelHubComponent implements Component {
 			items.push({
 				id,
 				label: tag,
-				detail: [info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "", this.#settings.getRoleScopeNote?.(row.role) ?? ""].filter(Boolean).join(" · "),
+				detail: [
+					info.name && info.name !== (info.tag ?? info.name ?? row.role) ? info.name : "",
+					this.#settings.getRoleScopeNote?.(row.role) ?? "",
+				]
+					.filter(Boolean)
+					.join(" · "),
 				facts,
 				...(assignment && !assignment.autoSelected ? {} : { tone: "muted" as const }),
 				...(cycleIndex >= 0

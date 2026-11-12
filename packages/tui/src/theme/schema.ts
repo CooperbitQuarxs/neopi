@@ -32,13 +32,16 @@ export const ANSI_COLOR_INDEX = {
 export type AnsiColor = keyof typeof ANSI_COLOR_INDEX;
 
 /**
- * Tokens a theme is allowed to omit. They resolve to the terminal default
- * foreground, so `Theme.fg()` stays total for callers that paint a token a theme
- * never declared (e.g. a `modelTags.<role>.color` reference) while
- * `Theme.hasColor()` still reports them as unset.
+ * Tokens a theme is allowed to omit. Marker colors inherit light/dark defaults
+ * in the loader; other omitted tokens resolve to the terminal default foreground
+ * so `Theme.fg()` remains total while `Theme.hasColor()` reports them as unset.
  */
 export const OPTIONAL_THEME_COLOR_RECORD = {
 	assistantMessageText: true,
+	provenancePurple: true,
+	provenanceGold: true,
+	provenanceSilver: true,
+	provenanceBronze: true,
 } satisfies Partial<Record<ThemeColor, true>>;
 
 export interface ThemeJson {
@@ -83,6 +86,10 @@ export interface ThemeJson {
 
 export type ThemeColor =
 	| "accent"
+	| "provenancePurple"
+	| "provenanceGold"
+	| "provenanceSilver"
+	| "provenanceBronze"
 	| "border"
 	| "borderAccent"
 	| "borderMuted"
@@ -147,6 +154,10 @@ export type ThemeColor =
 /** Set of all valid ThemeColor string values for runtime validation */
 const THEME_COLOR_RECORD = {
 	accent: true,
+	provenancePurple: true,
+	provenanceGold: true,
+	provenanceSilver: true,
+	provenanceBronze: true,
 	border: true,
 	borderAccent: true,
 	borderMuted: true,
