@@ -25,7 +25,7 @@ import {
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AgentLifecycleManager } from "@oh-my-pi/pi-coding-agent/registry/agent-lifecycle";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
-import { getProjectDir, setProjectDir } from "@oh-my-pi/pi-utils";
+import { getProjectDir, isInteractiveHost, setInteractiveHost, setProjectDir } from "@oh-my-pi/pi-utils";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal";
 import { installInMemoryRelay, uninstallInMemoryRelay } from "./collab/helpers/in-memory-relay";
 import { cfgTierOpenai } from "@oh-my-pi/pi-coding-agent/session/settings";
@@ -97,9 +97,15 @@ class InputTrackingTerminal extends CountingTerminal {
 	}
 }
 
+let savedInteractiveHost: boolean;
+beforeEach(() => {
+	savedInteractiveHost = isInteractiveHost();
+});
+
 // `runRootCommand` registers the CLI's extension roots (`--no-extensions` → explicit-only) process-wide.
 afterEach(() => {
 	clearOmpExtensionCliRoots();
+	setInteractiveHost(savedInteractiveHost);
 });
 
 describe("outer startup collaboration gate", () => {
@@ -373,7 +379,6 @@ describe("Composer prepaint", () => {
 				undefined,
 				undefined,
 				undefined,
-				undefined,
 				composer,
 			);
 			vi.spyOn(mode.statusLine, "watchBranch").mockImplementation(() => {});
@@ -449,7 +454,6 @@ describe("Composer prepaint", () => {
 				undefined,
 				undefined,
 				undefined,
-				undefined,
 				adoptedComposer,
 			);
 			lease.adopt();
@@ -499,7 +503,6 @@ describe("Composer prepaint", () => {
 		const mode = new InteractiveMode(
 			testSession.session,
 			"test",
-			undefined,
 			undefined,
 			undefined,
 			undefined,
@@ -560,7 +563,6 @@ describe("Composer prepaint", () => {
 			undefined,
 			undefined,
 			undefined,
-			undefined,
 			lease.composer,
 		);
 		lease.adopt();
@@ -588,7 +590,6 @@ describe("Composer prepaint", () => {
 		const mode = new InteractiveMode(
 			testSession.session,
 			"test",
-			undefined,
 			undefined,
 			undefined,
 			undefined,
@@ -669,7 +670,6 @@ describe("Composer prepaint", () => {
 		const mode = new InteractiveMode(
 			testSession.session,
 			"test",
-			undefined,
 			undefined,
 			undefined,
 			undefined,
@@ -803,7 +803,6 @@ describe("Composer prepaint", () => {
 			mode = new InteractiveMode(
 				testSession.session,
 				"9.9.9",
-				undefined,
 				undefined,
 				undefined,
 				undefined,

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
-import { AgentDefinitionEditor, AGENT_DEFINITION_FIELDS, type AgentDefinitionDraft, type AgentEditorDeps } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
+import { AgentDefinitionEditor, type AgentDefinitionDraft, type AgentEditorDeps } from "@oh-my-pi/pi-tui/overlays/agent-definition-editor";
 import type { DescribeContext } from "@oh-my-pi/pi-tui/native/node";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { TUI } from "@oh-my-pi/pi-tui";
@@ -8,7 +8,7 @@ import { listAgentDefinitionTools } from "@oh-my-pi/pi-coding-agent/tools/tool-c
 import { isJTDSchema } from "@oh-my-pi/pi-coding-agent/tools/jtd-to-json-schema";
 
 const tui = { requestRender() {}, stop() {}, start() {}, terminal: { rows: 35 } } as unknown as TUI;
-const cx: DescribeContext = { supports: () => true, feature: () => true } as DescribeContext;
+const cx: DescribeContext = { cols: 120, reduceMotion: false, dark: true, supports: () => true, feature: () => true };
 beforeAll(async () => { await initTheme(false); });
 
 function setup(definition: AgentDefinitionDraft = { name: "draft", description: "A draft", systemPrompt: "Be useful." }, overrides: Partial<AgentEditorDeps> = {}) {
@@ -47,7 +47,6 @@ describe("agent definition rich editor", () => {
 		for (const draft of [{ name: "", description: "", systemPrompt: "" }, { name: "existing", description: "Existing", systemPrompt: "Instructions" }]) {
 			const ui = setup(draft);
 			expect(ui.rows().map(row => row.id)).toEqual(expect.arrayContaining(expected));
-			expect(AGENT_DEFINITION_FIELDS.map(field => field.key).sort()).toEqual([...expected].sort());
 			ui.back(); expect(ui.closed()).toBe(true);
 		}
 	});

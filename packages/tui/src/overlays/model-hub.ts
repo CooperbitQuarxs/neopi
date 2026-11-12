@@ -291,6 +291,10 @@ export interface ModelHubCallbacks {
 	onLoginRequest?: (providerId: string) => void;
 	/** Open the mixture graph editor from a selected mixture model. */
 	onDefineMixture?: (name?: string) => void;
+	/** Returns the rebuilt `--models` scope for the hub to list; `undefined` keeps the current one. */
+	onCatalogRefreshed?: (
+		providerId?: string,
+	) => ReadonlyArray<ScopedModelItem> | undefined | Promise<ReadonlyArray<ScopedModelItem> | undefined>;
 	/** Save the current role assignments and default thinking level as a named model preset. */
 	onSavePreset?: (name: string) => void;
 	/**
@@ -890,7 +894,7 @@ export class ModelHubComponent implements Component {
 			this.#catalogRefreshing = true;
 			this.#registry
 				.refresh("online")
-				.then(() => this.#syncFromRegistryState())
+				.then(() => this.#afterRegistryRefresh())
 				.catch(error => {
 					this.#configError = error instanceof Error ? error.message : String(error);
 				})
@@ -1731,6 +1735,12 @@ export class ModelHubComponent implements Component {
 		this.#scheduledProviderRefreshes.set(providerId, timer);
 	}
 
+	async #afterRegistryRefresh(providerId?: string): Promise<void> {
+		const scope = await this.#callbacks.onCatalogRefreshed?.(providerId);
+		if (scope) this.#scopedModels = scope;
+		this.#syncFromRegistryState();
+	}
+
 	async #refreshProviderInBackground(providerId: string, refreshCommandCredentials = false): Promise<void> {
 		try {
 			if (refreshCommandCredentials) {
@@ -1740,7 +1750,7 @@ export class ModelHubComponent implements Component {
 			}
 			// The provider refresh already updated the registry snapshot;
 			// re-reading it here stays purely in-memory.
-			this.#syncFromRegistryState();
+			await this.#afterRegistryRefresh(providerId);
 		} catch (error) {
 			this.#configError = error instanceof Error ? error.message : String(error);
 		} finally {

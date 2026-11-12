@@ -4,6 +4,7 @@ import { cfgLiveModel } from "../live/settings";
 import { eventAudioCommand } from "../event-audio/observer";
 import { AgentRegistry } from "../registry/agent-registry";
 import type { AgentSession } from "../session/agent-session";
+import type { AgentSessionHandle } from "../session/agent-session-handle";
 import { clearApprovalGrants } from "../tools/approval-cache";
 import { clearSubmittedText } from "./helpers/draft";
 import { shutdownHandlerTui } from "./builtin-lifecycle";
@@ -13,7 +14,7 @@ import { commandConsumed, errorMessage, parseSubcommand, usage } from "./helpers
 import type { SlashCommandSpec } from "./types";
 
 /** Advisors with review work they can still run (not parked, yielded, or quota-paused). */
-function advisorUnsettledCount(session: AgentSession): number {
+function advisorUnsettledCount(session: AgentSessionHandle): number {
 	return session
 		.getAdvisorStatusOverview()
 		.advisors.filter(advisor => advisor.backlog > 0 && !advisor.isPaused && !advisor.yielded).length;
