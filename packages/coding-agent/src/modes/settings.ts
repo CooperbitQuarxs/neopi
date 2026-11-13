@@ -1,4 +1,4 @@
-import { APP_NAME } from "@oh-my-pi/pi-utils";
+import { defaultUpdateChannel } from "../cli/update-config";
 import { combine, effect, register, type Setting } from "../config/registry";
 import type { Settings } from "../config/settings";
 import { MOTION_MODES, MOTION_PRESETS } from "../config/motion-presets";
@@ -1510,6 +1510,41 @@ export const cfgStartupSetupWizard = register({
 		group: "Startup & Updates",
 		label: "Setup Wizard",
 		description: "Show newly added onboarding steps once per setup version",
+	},
+});
+
+export const cfgUpdateChannel = register({
+	id: "update.channel",
+	type: "enum",
+	values: ["stable", "nightly"] as const,
+	default: defaultUpdateChannel(),
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "Update Channel",
+		description: "Follow stable NeoPi releases or nightly prereleases; changing channel releases rollback hold",
+		options: [
+			{ value: "stable", label: "Stable", description: "Latest stable NeoPi release" },
+			{ value: "nightly", label: "Nightly", description: "Latest NeoPi prerelease" },
+		],
+	},
+});
+
+export const cfgUpdateAuto = register({
+	id: "update.auto",
+	type: "enum",
+	values: ["off", "notify", "auto"] as const,
+	default: "notify",
+	ui: {
+		tab: "interaction",
+		group: "Startup & Updates",
+		label: "NeoPi Auto-Update",
+		description: "Check the selected NeoPi channel after interactive startup",
+		options: [
+			{ value: "off", label: "Off", description: "Don't check for NeoPi updates" },
+			{ value: "notify", label: "Notify", description: "Notify when a NeoPi update is available" },
+			{ value: "auto", label: "Auto", description: "Install verified NeoPi updates for the next launch" },
+		],
 	},
 });
 

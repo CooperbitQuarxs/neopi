@@ -1,14 +1,32 @@
-import { afterEach, expect, test, vi } from "bun:test";
-import Update from "../src/commands/update";
+import { expect, test } from "bun:test";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { persistUpdateChannel } from "../src/cli/update-config";
+import { Settings } from "../src/config/settings";
+import { cfgUpdateAuto, cfgUpdateChannel } from "../src/modes/settings";
 
-afterEach(() => vi.restoreAllMocks());
+for (const [legacy, expected] of [
+	[true, "auto"],
+	[false, "off"],
+] as const) {
+	test(`legacy updater preferences preserve ${expected} mode and migrate canary to nightly`, () => {
+		const settings = Settings.isolated({ "update.channel": "canary", "update.auto": legacy });
+		expect(cfgUpdateChannel.get(settings)).toBe("nightly");
+		expect(cfgUpdateAuto.get(settings)).toBe(expected);
+	});
+}
 
-test("binary update checks cannot contact a release source or offer an upstream installer", async () => {
-	const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Release network access is forbidden"));
-	const output = vi.spyOn(console, "log").mockImplementation(() => {});
-	await new Update(["--check"], { bin: "npi", version: "0.0.0-test", commands: new Map() }).run();
-	expect(fetch).not.toHaveBeenCalled();
-	const notice = output.mock.calls.flat().join("\n");
-	expect(notice).toContain("https://github.com/PsychedelicShayna/neopi/releases");
-	expect(notice).not.toMatch(/omp\.sh|build\.stencil\.so|can1357\/oh-my-pi/);
+test("the full settings loader accepts a channel saved by the recovery path without losing unrelated preferences", async () => {
+	const root = await mkdtemp(join(tmpdir(), "neopi-update-settings-"));
+	try {
+		await writeFile(join(root, "config.yml"), "startup:\n  quiet: true\nupdate:\n  auto: auto\n");
+		await persistUpdateChannel("stable", root);
+		const settings = await Settings.loadReadOnly({ agentDir: root, cwd: root });
+		expect(cfgUpdateChannel.get(settings)).toBe("stable");
+		expect(cfgUpdateAuto.get(settings)).toBe("auto");
+		expect(settings.getGlobalSettings().startup).toEqual({ quiet: true });
+	} finally {
+		await rm(root, { recursive: true, force: true });
+	}
 });
