@@ -26,38 +26,11 @@ Validate both upstream regressions and fork contracts at the affected boundaries
 
 ## Command and Settings provenance
 
-`packages/coding-agent/src/config/entry-provenance.json` is the command/setting
-classification source. `packages/tui/src/theme/ui-entry-provenance.json` carries
-the existing hotkey, role and status-segment annotations. Both use one lookup and
-the same tier vocabulary in `packages/tui/src/theme/provenance.ts`.
+For every upstream sync or “synchronize moon and stars” request, MUST follow
+[Synchronize moon and stars](../../.agents/skills/sync-moon-and-stars/SKILL.md).
+That skill owns the classification evidence, published stable-tag rule, moon
+convention, upstream cohort aging and rendering verification.
 
-- **Purple crescent:** a nightly-only NeoPi addition.
-- **Same crescent, original green:** a NeoPi addition in the latest published stable release.
-- **Gold, silver, bronze stars:** additions in the newest, previous and all older
-  synced upstream ranges respectively. Upstream cohorts never expire.
-
-Pin `stableRelease.tag` and its peeled commit to GitHub's latest published
-non-prerelease, not the potentially newer `neopi` branch head. Update the stable
-and nightly fork lists from that released inventory. For an upstream sync,
-prepend one `upstream` range with its version, exclusive previous commit,
-inclusive release commit and newly introduced IDs; existing ranges age
-automatically without moving every item between color lists. Keep every cohort:
-index 0 is gold, index 1 silver, and index 2 or greater bronze. A fork feature
-adopted upstream takes the upstream tier.
-
-Audit the actual built-in command registry (including aliases and bundled
-extension commands) and `orderedSettings()`/`createSettingsHost()` inventories.
-Include generated and conditionally hidden setting rows; configuration-only
-settings may remain in the dataset even though the panel does not display them.
-Do not assign fork origin to arbitrary third-party commands by name. Bundled
-extensions provide their own provenance from the shared registry at registration.
-Display marks never change command identifiers, completion values or type icons.
-
-Marker colors are optional theme tokens: `provenancePurple`, `provenanceGold`,
-`provenanceSilver`, and `provenanceBronze`. NeoPi crescents use `provenancePurple`
-for nightly and the original star's `success` green for published stable.
-Older/custom themes inherit light or dark defaults and may override each token.
-Terminal rows and native spans paint
-markers independently of the surrounding label; plain Markdown/native-label
-transport uses the matching glyph without embedding terminal ANSI sequences.
+New commands, settings and interactive TUI features follow
+[Feature provenance](development.md#feature-provenance) in their introducing PR.
 

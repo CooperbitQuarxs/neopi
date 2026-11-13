@@ -91,6 +91,7 @@ nothing here requires confirmation beyond it. Repository specifics:
 
 ## Code Quality
 
+- New commands, settings, or interactive TUI features: MUST follow [Feature provenance](docs/agents/development.md#feature-provenance).
 - No `any` unless absolutely necessary.
 - **NEVER use `ReturnType<>`** — use the actual type name.
 - **NEVER use inline imports** — no `await import()`, no `import("pkg").Type` in type positions, no dynamic type imports. Always top-level.
