@@ -226,7 +226,9 @@
 				"customPersonalities",
 				"models.defaultScope",
 				"settings.defaultScope",
-				"task.definitionGenerationConversationTtlMs"
+				"task.definitionGenerationConversationTtlMs",
+				"update.auto",
+				"update.channel"
 			],
 			"commands": [
 				"chron",

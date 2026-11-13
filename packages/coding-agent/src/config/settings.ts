@@ -39,7 +39,6 @@ import type { ModelRole } from "../config/model-roles";
 import { loadCapability } from "../discovery";
 import { AgentStorage, type AgentStorageApi } from "../session/agent-storage";
 import { type CompactionMethod, DEFAULT_COMPACTION_METHOD_ORDER } from "../session/compaction-methods";
-import MODEL_PRIO from "../priority.json" with { type: "json" };
 import { writeFileAtomically } from "../utils/atomic-file";
 import { isRegisteredSearchEngine } from "../web/search/provider";
 import { stringifyYamlConfig } from "@oh-my-pi/pi-utils/yaml-config";
@@ -501,7 +500,11 @@ export type SettingsMirrorWrite =
 			readonly previousRole: string | undefined;
 	  }
 	| { readonly op: "setRoleEffortSelection"; readonly role: string; readonly selection: EffortSelection | undefined }
-	| { readonly op: "setProjectRoleEffortSelection"; readonly role: string; readonly selection: EffortSelection | undefined };
+	| {
+			readonly op: "setProjectRoleEffortSelection";
+			readonly role: string;
+			readonly selection: EffortSelection | undefined;
+	  };
 
 /** A disk or scope operation a worker mirror runs on its main-thread instance. */
 export type SettingsMirrorRefresh =
@@ -1102,7 +1105,10 @@ export class Settings {
 	 */
 	overlayLayers(): OverlayLayers {
 		return structuredClone({
-			global: this.#global, overrides: this.#overrides, session: this.#session, derived: this.#derived,
+			global: this.#global,
+			overrides: this.#overrides,
+			session: this.#session,
+			derived: this.#derived,
 		});
 	}
 
@@ -1256,11 +1262,13 @@ export class Settings {
 		this.#savedRuntimeModelRoleOverrides = new Map(state.savedRuntimeModelRoleOverrides);
 		this.#configOverlay = structuredClone(state.configOverlay);
 		this.#overrides = structuredClone(state.overrides);
-		this.#softPins = new Set(state.softPins.map(id => {
-			const setting = lookupSetting(id);
-			if (!setting) throw new Error(`Unknown mirrored setting ${id}`);
-			return setting;
-		}));
+		this.#softPins = new Set(
+			state.softPins.map(id => {
+				const setting = lookupSetting(id);
+				if (!setting) throw new Error(`Unknown mirrored setting ${id}`);
+				return setting;
+			}),
+		);
 		this.#derived = state.derived;
 		this.#projectShellPathSource = state.projectShellPathSource;
 		this.#overlayShellPathSource = state.overlayShellPathSource;
@@ -1304,8 +1312,11 @@ export class Settings {
 	 */
 	rawValue(setting: AnySetting): unknown {
 		const merged = this.#mergedView();
-		if (setting.roleScoped && configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
-			configuredValue(this.#session, setting, this.#cwd) === undefined) {
+		if (
+			setting.roleScoped &&
+			configuredValue(this.#overrides, setting, this.#cwd) === undefined &&
+			configuredValue(this.#session, setting, this.#cwd) === undefined
+		) {
 			const roleValue = this.activeRole === undefined ? undefined : this.getRoleSetting(this.activeRole, setting);
 			if (roleValue !== undefined) return roleValue;
 		}
@@ -1407,7 +1418,9 @@ export class Settings {
 	/** Bind only at a session identity change; changing cwd must not rebind this path. */
 	async attachSessionFile(sessionFile: string | undefined): Promise<void> {
 		if (this.#mirror) return this.#forwardRefresh(this.#mirror, { op: "attachSessionFile", sessionFile });
-		const nextPath = sessionFile?.endsWith(".jsonl") ? path.join(sessionFile.slice(0, -6), "settings.yml") : undefined;
+		const nextPath = sessionFile?.endsWith(".jsonl")
+			? path.join(sessionFile.slice(0, -6), "settings.yml")
+			: undefined;
 		if (nextPath === this.#sessionSettingsPath) return;
 		await this.saveSessionSettings();
 		let loaded: RawSettings = {};
@@ -2812,7 +2825,8 @@ export class Settings {
 		selection: EffortSelection | undefined,
 		scope: SettingsScope,
 	): void {
-		if (this.#mirror) return this.#forward(this.#mirror, { op: "setRoleModelAndEffort", role, selector, selection, scope });
+		if (this.#mirror)
+			return this.#forward(this.#mirror, { op: "setRoleModelAndEffort", role, selector, selection, scope });
 		const staged = this.#stageRoleModelAndEffort(role, selector, selection, scope);
 		const previousRoles = cfgModelRoles.get(this);
 		const previousEfforts = cfgRoleEffortSelections.get(this);
@@ -2884,7 +2898,13 @@ export class Settings {
 		previousRole?: string,
 	): void {
 		if (this.#mirror) {
-			return this.#forward(this.#mirror, { op: "setFallbackChainAndEfforts", role, chain, selections, previousRole });
+			return this.#forward(this.#mirror, {
+				op: "setFallbackChainAndEfforts",
+				role,
+				chain,
+				selections,
+				previousRole,
+			});
 		}
 		if (!role.trim()) throw new Error("Fallback chain must name a role");
 		assertValidSelectorPattern(role);
@@ -3069,8 +3089,14 @@ export class Settings {
 		};
 		const winner = this.getModelRoleProvenance(role);
 		const rank = { global: 0, project: 1, overlay: 2, session: 3, role: 3, runtime: 4, env: 5, default: -1 };
-		return { global: value("global"), project: value("project"), session: value("session"),
-			effective: this.getModelRole(role), winner, shadowed: rank[winner] > rank[scope] };
+		return {
+			global: value("global"),
+			project: value("project"),
+			session: value("session"),
+			effective: this.getModelRole(role),
+			winner,
+			shadowed: rank[winner] > rank[scope],
+		};
 	}
 
 	/**
@@ -3940,6 +3966,13 @@ export class Settings {
 
 	/** Apply schema migrations to raw settings */
 	#migrateRawSettings(raw: RawSettings, captureLegacyChangelogVersion = true): RawSettings {
+		// Preserve the existing updater preferences across the channel/mode cutover.
+		const update = isRecord(raw.update) ? raw.update : undefined;
+		if (update?.channel === "canary") update.channel = "nightly";
+		if (typeof update?.auto === "boolean") update.auto = update.auto ? "auto" : "off";
+		if (raw["update.channel"] === "canary") raw["update.channel"] = "nightly";
+		if (typeof raw["update.auto"] === "boolean") raw["update.auto"] = raw["update.auto"] ? "auto" : "off";
+
 		// queueMode -> steeringMode
 		if ("queueMode" in raw && !("steeringMode" in raw)) {
 			raw.steeringMode = raw.queueMode;
