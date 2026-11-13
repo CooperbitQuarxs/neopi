@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Provenance marks distinguish nightly-only NeoPi additions from released additions, with purple stable stars and gold, silver and bronze upstream-age stars that inherit legible light/dark theme colors.
+- NeoPi provenance uses the same crescent in purple for nightly-only additions and the original green for published stable additions; gold, silver and bronze stars identify upstream additions only, with every older sync cohort retained as bronze.
 - Vim menu, list and viewer motions now follow the live, default-off Vim preference, alongside modal composer editing; ordinary navigation and surface actions remain available without opting in.
 
 ### Added

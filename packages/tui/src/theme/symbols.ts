@@ -1226,7 +1226,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	"status.shadowed": "[/]",
 	"status.aborted": "[#]",
 	"status.done": "[+]",
-	"provenance.moon": "[nightly]",
+	"provenance.moon": "[neopi]",
 	"provenance.star": "*",
 	// Navigation
 	"nav.cursor": ">",
