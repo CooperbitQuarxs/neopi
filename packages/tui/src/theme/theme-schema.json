@@ -109,7 +109,7 @@
 				},
 				"provenancePurple": {
 					"$ref": "#/$defs/colorValue",
-					"description": "NeoPi additions present in the latest published stable release"
+					"description": "Nightly-only NeoPi crescent marker"
 				},
 				"provenanceGold": {
 					"$ref": "#/$defs/colorValue",
