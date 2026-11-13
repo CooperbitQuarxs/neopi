@@ -50,11 +50,11 @@ Before designing agents, sub-agents, advisors, roles, lifecycle or interfaces,
 read `docs/agents/philosophy.md`: one kind of agent, roles as templates,
 restrictions as named properties.
 
-Exact argv `npi update` launches the fork-specific interactive update session
+Exact argv `npi update source` launches the fork-specific interactive update session
 from `packages/coding-agent/src/prompts/npi-update.md`; the executable basename
-and exact argument list gate that rewrite. `npi update --check`,
-`npi update --help`, and any additional arguments keep the ordinary
-update-command behavior.
+and exact argument list gate that rewrite. Binary status, checks, channel sync
+and rollback use the early updater CLI; plugin updates remain
+`npi update --plugins`.
 
 
 ### Package Structure
