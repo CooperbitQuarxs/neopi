@@ -61,6 +61,16 @@ export async function compileCodingAgent(options: CodingAgentCompileOptions): Pr
 			files: options.native ? await embeddedAddonFiles(options.native) : {},
 			define: {
 				"process.env.PI_COMPILED": JSON.stringify("true"),
+				"process.env.PI_UPDATE_CHANNEL": JSON.stringify(
+					process.env.PI_UPDATE_CHANNEL ??
+						(process.env.RELEASE_CHANNEL === "stable" ||
+						process.env.GITHUB_REF === "refs/heads/neopi" ||
+						process.env.GITHUB_EVENT_NAME === "workflow_dispatch" ||
+						(process.env.GITHUB_REF_TYPE === "tag" &&
+							/^v?\d+\.\d+\.\d+(?:\+.*)?$/.test(process.env.GITHUB_REF_NAME ?? ""))
+							? "stable"
+							: "nightly"),
+				),
 				"process.env.PI_COMPILE_TARGET": JSON.stringify(options.compileTarget ?? options.target ?? "host"),
 				"process.env.PI_DOCS_EMBED": JSON.stringify((await buildDocsIndexPayload()).payload),
 				"process.env.PI_BUILD_GIT_SHA": JSON.stringify(buildInfo.gitSha ?? ""),

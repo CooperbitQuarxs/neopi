@@ -48,6 +48,8 @@ import type { SessionPickerOptions } from "@oh-my-pi/pi-tui/apps/session-picker"
 import { setMenuSearchVimMode } from "@oh-my-pi/pi-tui/components/menu-navigation";
 import { applyStartupCwd } from "./cli/startup-cwd";
 import { CliUsageError } from "./cli/usage-error";
+import { checkForAutomaticUpdate, releaseRollbackHold } from "./cli/neopi-updater";
+import { defaultUpdateChannel, readUpdatePreferences } from "./cli/update-config";
 import { findConfigFile } from "./config";
 import { ModelRegistry } from "./config/model-registry";
 import { formatModelSelectorValue } from "@oh-my-pi/pi-tui/overlays/model-selector";
@@ -2995,6 +2997,35 @@ export async function runRootCommand(
 			// prompt: fallback-chain validation and the startup changelog only add header
 			// rows, and the background refresh already raced the first prompt when it ran earlier.
 			const startDeferredStartupWork = (interactive: InteractiveMode): void => {
+				const globalUpdateChannel = () => {
+					const update = settingsInstance.getGlobalSettings().update as { channel?: unknown } | undefined;
+					return update?.channel === "stable" || update?.channel === "nightly"
+						? update.channel
+						: defaultUpdateChannel();
+				};
+				let updateChannel = globalUpdateChannel();
+				// Machine-wide updates follow persisted global preferences, never a
+				// project, runtime or session override of the effective setting.
+				session.addDisposer(
+					settingsInstance.onPersistedLayersChange(() => {
+						const next = globalUpdateChannel();
+						if (next === updateChannel) return;
+						updateChannel = next;
+						void releaseRollbackHold(next).catch(error =>
+							logger.warn("NeoPi rollback hold release failed", { error: String(error) }),
+						);
+					}),
+				);
+				void readUpdatePreferences(getAgentDir())
+					.then(preferences =>
+						checkForAutomaticUpdate({
+							channel: preferences.channel,
+							mode: preferences.mode,
+							agentDir: getAgentDir(),
+							onMessage: message => interactive.showStatus(message),
+						}),
+					)
+					.catch(error => logger.warn("NeoPi automatic update check failed", { error: String(error) }));
 				if (showsStartupChangelog) {
 					void resolveStartupChangelogForDisplay({
 						mode: cfgStartupChangelogMode.get(settingsInstance),
